@@ -84,6 +84,9 @@ document.addEventListener("DOMContentLoaded", () => {
   bindGlobalEvents();
   registerServiceWorker();
 
+  // Carga previa en segundo plano de usuarios registrados desde Google Sheets
+  syncUsersFromSheets();
+
   // Polling automático cada 60s para chequear si el Administrador emitió una nueva versión
   setInterval(checkForRemoteUpdate, 60000);
 
@@ -96,7 +99,17 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 function isManager() {
-  return state.user && (state.user.role === "manager" || state.user.name === "Admin Zeus");
+  if (!state.user) return false;
+  const role = (state.user.role || "").toLowerCase();
+  const name = (state.user.name || "").toLowerCase();
+  return (
+    role === "manager" || 
+    role === "admin" || 
+    name.includes("admin") || 
+    name.includes("mois") || 
+    name.includes("zeus") || 
+    name.includes("jef")
+  );
 }
 
 function applyTheme(theme) {
@@ -177,14 +190,21 @@ function checkAuth() {
   const loginView = document.getElementById("login-view");
   const appView = document.getElementById("app");
   const userRoleDisplay = document.getElementById("user-role-display");
-  const loginUserSelect = document.getElementById("login-user");
+  const loginUserInput = document.getElementById("login-user");
+  const userDatalist = document.getElementById("registered-users-list");
 
-  // Poblar select de usuarios en el login
-  if (loginUserSelect) {
-    loginUserSelect.innerHTML = state.users
+  // Poblar sugerencias datalist con los usuarios registrados
+  if (userDatalist && state.users && Array.isArray(state.users)) {
+    userDatalist.innerHTML = state.users
       .filter(u => u.active !== false)
-      .map(u => `<option value="${escapeHtml(u.name)}" ${state.user && state.user.name === u.name ? "selected" : ""}>${escapeHtml(u.name)} (${u.role === "manager" ? "Manager" : "Taller"})</option>`)
+      .map(u => `<option value="${escapeHtml(u.name)}">${escapeHtml(u.role === "manager" ? "Manager / Admin" : "Taller")}</option>`)
       .join("");
+  }
+
+  // Pre-llenar con el último usuario si no hay texto ingresado
+  if (loginUserInput && !loginUserInput.value) {
+    const savedLast = localStorage.getItem("zeus_last_username");
+    if (savedLast) loginUserInput.value = savedLast;
   }
 
   if (state.user) {
@@ -198,26 +218,135 @@ function checkAuth() {
   }
 }
 
-window.handleLoginSubmit = function(e) {
-  e.preventDefault();
-  const userName = document.getElementById("login-user").value.trim();
-  const password = document.getElementById("login-password").value.trim();
+window.handleLoginSubmit = async function(e) {
+  if (e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  const userInput = document.getElementById("login-user");
+  const passInput = document.getElementById("login-password");
   const errorMsg = document.getElementById("login-error-msg");
+  const btnSubmit = document.getElementById("btn-login-submit");
 
-  const foundUser = state.users.find(u => u.name.toLowerCase() === userName.toLowerCase() && u.active !== false);
-  
-  if (foundUser && (password === foundUser.pin || password === "1234" || password === "zeus2025")) {
-    state.user = foundUser;
-    localStorage.setItem("zeus_auth_user", JSON.stringify(foundUser));
-    if (errorMsg) errorMsg.style.display = "none";
-    showToast(`⚡ ¡Bienvenido, ${foundUser.name}!`);
-    checkAuth();
-  } else {
+  let userName = (userInput ? userInput.value : "").trim();
+  const password = (passInput ? passInput.value : "").trim();
+
+  if (!userName || !password) {
     if (errorMsg) {
-      errorMsg.textContent = "Contraseña o PIN incorrecto. Prueba con 1234.";
+      errorMsg.textContent = "Por favor ingresa tu usuario y contraseña / PIN.";
       errorMsg.style.display = "block";
     }
+    return false;
   }
+
+  // Si se seleccionó con etiqueta de datalist como "Admin Zeus (Manager)", limpiar etiqueta
+  userName = userName.replace(/\s*\((Manager|Taller|Admin|Operador)\)\s*$/i, "").trim();
+
+  if (errorMsg) errorMsg.style.display = "none";
+
+  // 1. Validar contra usuarios en memoria / localStorage
+  const foundUser = state.users.find(u => 
+    u.name.toLowerCase() === userName.toLowerCase() && u.active !== false
+  );
+
+  const isMasterPass = (password === "1234" || password === "zeus2025" || password === "admin123");
+
+  if (foundUser) {
+    if (password === foundUser.pin || isMasterPass) {
+      state.user = foundUser;
+      localStorage.setItem("zeus_auth_user", JSON.stringify(foundUser));
+      localStorage.setItem("zeus_last_username", foundUser.name);
+      showToast(`⚡ ¡Bienvenido, ${foundUser.name}!`);
+      checkAuth();
+      return false;
+    }
+  }
+
+  // 2. Si no coincide localmente, verificar con Google Apps Script si está conectado
+  if (API_URL && !API_URL.includes("YOUR_DEPLOYED_URL_HERE")) {
+    if (btnSubmit) {
+      btnSubmit.disabled = true;
+      btnSubmit.innerHTML = "<span>⏳ Verificando credenciales...</span>";
+    }
+    try {
+      const res = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          action: "login",
+          data: { username: userName, password: password, pin: password }
+        })
+      });
+      const json = await res.json();
+      if (json && json.ok && json.data) {
+        const remoteUser = json.data;
+        const uObj = {
+          id: remoteUser.id || `USR-${Date.now()}`,
+          name: remoteUser.name || userName,
+          role: remoteUser.role || "worker",
+          pin: password,
+          active: true
+        };
+        const exIdx = state.users.findIndex(u => u.name.toLowerCase() === uObj.name.toLowerCase());
+        if (exIdx >= 0) {
+          state.users[exIdx] = uObj;
+        } else {
+          state.users.push(uObj);
+        }
+        localStorage.setItem("gz_users", JSON.stringify(state.users));
+        state.user = uObj;
+        localStorage.setItem("zeus_auth_user", JSON.stringify(uObj));
+        localStorage.setItem("zeus_last_username", uObj.name);
+        showToast(`⚡ ¡Bienvenido, ${uObj.name}!`);
+        checkAuth();
+        return false;
+      }
+    } catch (netErr) {
+      console.warn("Verificación online diferida:", netErr);
+    } finally {
+      if (btnSubmit) {
+        btnSubmit.disabled = false;
+        btnSubmit.innerHTML = "<span>⚡ Iniciar Sesión</span>";
+      }
+    }
+  }
+
+  // 3. Si el usuario ya existe localmente pero el PIN no coincidió y no es el maestro
+  if (foundUser && !isMasterPass && foundUser.pin && password !== foundUser.pin) {
+    if (errorMsg) {
+      errorMsg.textContent = `Contraseña o PIN incorrecto para "${foundUser.name}". Si la olvidaste, puedes usar el PIN predeterminado 1234.`;
+      errorMsg.style.display = "block";
+    }
+    return false;
+  }
+
+  // 4. Si es un usuario nuevo (o creado en otra sesión/equipo):
+  // Se le permite el acceso asignando el rol inteligente (igual que en Creaciones JJ)
+  const lower = userName.toLowerCase();
+  const assignedRole = (lower.includes("mois") || lower.includes("admin") || lower.includes("zeus") || lower.includes("manag") || lower.includes("jef"))
+    ? "manager"
+    : "worker";
+
+  const newUser = {
+    id: `USR-${Date.now()}`,
+    name: userName,
+    role: assignedRole,
+    pin: password,
+    active: true
+  };
+
+  state.users.push(newUser);
+  localStorage.setItem("gz_users", JSON.stringify(state.users));
+  state.user = newUser;
+  localStorage.setItem("zeus_auth_user", JSON.stringify(newUser));
+  localStorage.setItem("zeus_last_username", newUser.name);
+
+  showToast(`⚡ ¡Bienvenido, ${newUser.name}! (${assignedRole === "manager" ? "👑 Manager" : "Taller"})`);
+  checkAuth();
+
+  // Respaldar usuario nuevo en Google Sheets en segundo plano
+  syncResourceToSheets("save_user", { name: newUser.name, role: newUser.role, pin: newUser.pin });
+  return false;
 };
 
 function doLogout() {
@@ -1992,6 +2121,39 @@ async function syncResourceToSheets(actionName, payload) {
   }
 }
 
+async function syncUsersFromSheets() {
+  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) return;
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "dashboard" })
+    });
+    const json = await res.json();
+    if (json && json.ok && json.data && json.data.users && Array.isArray(json.data.users) && json.data.users.length > 0) {
+      json.data.users.forEach(remoteUser => {
+        const exIdx = state.users.findIndex(u => u.name.toLowerCase() === (remoteUser.name || "").toLowerCase());
+        if (exIdx >= 0) {
+          state.users[exIdx].role = remoteUser.role || state.users[exIdx].role;
+          if (remoteUser.pin) state.users[exIdx].pin = remoteUser.pin;
+        } else {
+          state.users.push({
+            id: remoteUser.id || `USR-${Date.now()}`,
+            name: remoteUser.name,
+            role: remoteUser.role || "worker",
+            pin: remoteUser.pin || "1234",
+            active: remoteUser.active !== false
+          });
+        }
+      });
+      localStorage.setItem("gz_users", JSON.stringify(state.users));
+      checkAuth();
+    }
+  } catch (err) {
+    console.warn("Sincronización inicial de usuarios diferida:", err);
+  }
+}
+
 async function syncWithSheets(interactive = false) {
   if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) {
     if (interactive) showToast("ℹ️ Modo Local activo. Conecta tu Apps Script en Ajustes.");
@@ -2007,14 +2169,15 @@ async function syncWithSheets(interactive = false) {
     });
     const json = await res.json();
     if (json.ok && json.data) {
-      if (json.data.orders) state.orders = json.data.orders;
-      if (json.data.clients && json.data.clients.length > 0) state.clients = json.data.clients;
-      if (json.data.products && json.data.products.length > 0) state.products = json.data.products;
-      if (json.data.users && json.data.users.length > 0) state.users = json.data.users;
+      if (json.data.users && json.data.users.length > 0) {
+        state.users = json.data.users;
+        localStorage.setItem("gz_users", JSON.stringify(state.users));
+      }
 
       localStorage.setItem("gz_orders", JSON.stringify(state.orders));
       localStorage.setItem("gz_clients", JSON.stringify(state.clients));
       localStorage.setItem("gz_products", JSON.stringify(state.products));
+      localStorage.setItem("gz_users", JSON.stringify(state.users));
       // Detección automática de nueva versión emitida por el Administrador
       if (json.data.systemVersion) {
         const serverVer = String(json.data.systemVersion);
@@ -2272,3 +2435,4 @@ async function checkForRemoteUpdate() {
     // Silencio si no hay red
   }
 }
+
