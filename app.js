@@ -6,7 +6,7 @@
  */
 
 // URL de la Web App de Google Apps Script (Reemplazar con la URL desplegada)
-let API_URL = localStorage.getItem("gz_api_url") || "https://script.google.com/macros/s/AKfycbz_PONER_TU_URL_AQUI/exec";
+let API_URL = localStorage.getItem("gz_api_url") || "https://script.google.com/macros/s/AKfycbwOeAmzuNHI4qGY3eRM2T8IR1y7n4b5lk8_y2oyGydsun_I2Z7a4LMJyy1IZbOMm0cbfQ/exec";
 
 // Estado Global de la Aplicación
 const state = {
