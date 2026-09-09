@@ -37,11 +37,21 @@
           <label for="login-user">Usuario / Responsable</label>
           <div class="input-icon-wrap">
             <span class="input-icon">👤</span>
-            <select id="login-user" class="form-select" required>
-              <option value="Admin Zeus" data-role="manager" selected>Admin Zeus (Manager)</option>
-              <option value="Producción Zeus" data-role="worker">Producción Zeus (Taller)</option>
-            </select>
+            <input 
+              type="text" 
+              id="login-user" 
+              list="registered-users-list" 
+              class="form-input" 
+              placeholder="Escribe tu usuario (ej. Moisés, Admin Zeus)" 
+              autocomplete="username" 
+              required 
+            />
+            <datalist id="registered-users-list">
+              <option value="Admin Zeus (Manager)"></option>
+              <option value="Producción Zeus (Taller)"></option>
+            </datalist>
           </div>
+          <small class="form-help">Escribe tu usuario o elígelo de las sugerencias</small>
         </div>
 
         <div class="form-group">
