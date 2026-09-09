@@ -1,16 +1,16 @@
 {
-  "name": "Granola Zeus – Control de Producción",
-  "short_name": "GranolaZeus",
-  "description": "Sistema de gestión de pedidos y producción artesanal Granola Zeus",
+  "name": "Zeus Granola Fit – Producción & Despacho",
+  "short_name": "ZeusGranola",
+  "description": "Sistema de gestión de pedidos, producción artesanal y despacho Zeus Granola Fit",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#d97706",
+  "background_color": "#07140e",
+  "theme_color": "#0d281a",
   "icons": [
     {
-      "src": "data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🥣</text></svg>",
-      "sizes": "192x192 512x512",
-      "type": "image/svg+xml",
+      "src": "logo_zeus.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
       "purpose": "any maskable"
     }
   ]
