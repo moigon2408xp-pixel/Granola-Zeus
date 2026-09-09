@@ -87,13 +87,20 @@ document.addEventListener("DOMContentLoaded", () => {
   // Carga previa en segundo plano de usuarios registrados desde Google Sheets
   syncUsersFromSheets();
 
-  // Polling automático cada 60s para chequear si el Administrador emitió una nueva versión
-  setInterval(checkForRemoteUpdate, 60000);
+  // Sincronización automática de pedidos, clientes y catálogo desde Google Sheets
+  syncWithSheets(false);
+
+  // Polling automático cada 60s para chequear si el Administrador emitió una nueva versión y refrescar datos
+  setInterval(() => {
+    checkForRemoteUpdate();
+    syncWithSheets(false);
+  }, 60000);
 
   // Detección inmediata al volver a la pestaña o app
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       checkForRemoteUpdate();
+      syncWithSheets(false);
     }
   });
 });
@@ -135,27 +142,20 @@ function normalizePhone(p) {
 
 function deduplicateClients() {
   if (!state.clients || !Array.isArray(state.clients)) return;
-  const seenPhones = new Map();
   const cleanList = [];
+  const seenKeys = new Set();
 
   for (const c of state.clients) {
     const normP = normalizePhone(c.telefono);
+    const normN = (c.nombre || "").trim().toLowerCase();
 
-    if (normP && normP.length >= 7) {
-      if (seenPhones.has(normP)) {
-        // Ya existía un cliente con este teléfono: unificar datos sin duplicar
-        const existing = seenPhones.get(normP);
-        if (!existing.direccion && c.direccion) existing.direccion = c.direccion;
-        if ((!existing.descuentoFijo || existing.descuentoFijo === 0) && c.descuentoFijo) {
-          existing.descuentoFijo = c.descuentoFijo;
-        }
-        if (c.nombre && c.nombre.length > existing.nombre.length) {
-          existing.nombre = c.nombre;
-        }
-        continue;
-      }
-      seenPhones.set(normP, c);
+    // Clave única compuesta por teléfono y nombre para no borrar clientes con nombres distintos que compartan número
+    const key = normP && normP.length >= 7 ? `${normP}_${normN}` : `name_${normN}`;
+
+    if (seenKeys.has(key)) {
+      continue;
     }
+    seenKeys.add(key);
     cleanList.push(c);
   }
 
@@ -258,6 +258,7 @@ window.handleLoginSubmit = async function(e) {
       localStorage.setItem("zeus_last_username", foundUser.name);
       showToast(`⚡ ¡Bienvenido, ${foundUser.name}!`);
       checkAuth();
+      syncWithSheets(false);
       return false;
     }
   }
@@ -343,6 +344,7 @@ window.handleLoginSubmit = async function(e) {
 
   showToast(`⚡ ¡Bienvenido, ${newUser.name}! (${assignedRole === "manager" ? "👑 Manager" : "Taller"})`);
   checkAuth();
+  syncWithSheets(false);
 
   // Respaldar usuario nuevo en Google Sheets en segundo plano
   syncResourceToSheets("save_user", { name: newUser.name, role: newUser.role, pin: newUser.pin });
@@ -1353,12 +1355,12 @@ function renderSettingsView(container) {
       </div>
     </div>
 
-    <!-- 1. Conexión con Google Sheets (SOLO ADMINISTRADOR) -->
-    ${manager ? `
+    <!-- 1. Conexión con Google Sheets (Visible para Admin o cuando falta configurar la URL) -->
+    ${(manager || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) ? `
       <div class="card" style="border:1.5px solid var(--gold);">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
           <h3 class="builder-section-title" style="margin:0;">🔗 Conexión con Google Sheets</h3>
-          <span class="admin-badge">👑 Solo Administrador</span>
+          <span class="admin-badge">👑 Administrador / Conexión</span>
         </div>
         <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:10px;">
           Pega aquí el enlace de tu Web App de Google Apps Script (el que termina en <code>/exec</code>) para sincronizar en tiempo real con tu hoja de Google Drive.
@@ -1695,7 +1697,13 @@ window.advanceOrderStatus = function(orderId) {
 
   localStorage.setItem("gz_orders", JSON.stringify(state.orders));
   renderCurrentTab();
-  syncSingleOrderToSheets(order);
+
+  // Actualizar estado en Google Sheets (¡NO crear un pedido nuevo!)
+  syncResourceToSheets("update_status", {
+    id: order.id,
+    status: order.estado,
+    responsable: state.user ? state.user.name : "Operador"
+  });
 };
 
 // ============================================================================
@@ -2169,15 +2177,35 @@ async function syncWithSheets(interactive = false) {
     });
     const json = await res.json();
     if (json.ok && json.data) {
-      if (json.data.users && json.data.users.length > 0) {
+      if (json.data.orders && Array.isArray(json.data.orders)) {
+        state.orders = json.data.orders;
+        localStorage.setItem("gz_orders", JSON.stringify(state.orders));
+      }
+
+      if (json.data.clients && Array.isArray(json.data.clients) && json.data.clients.length > 0) {
+        state.clients = json.data.clients.map((c, idx) => ({
+          id: c.id || `CLI-${idx + 1}`,
+          nombre: c.nombre || "",
+          telefono: c.telefono || "",
+          tipoEntrega: c.tipoEntrega || (c.delivery === "Sí" || c.delivery === "Delivery" ? "Delivery" : "Pickup"),
+          direccion: c.direccion || c.direccionDetallada || c.zona || "",
+          descuentoFijo: Number(c.descuentoFijo || 15),
+          notas: c.notas || ""
+        }));
+        deduplicateClients();
+        localStorage.setItem("gz_clients", JSON.stringify(state.clients));
+      }
+
+      if (json.data.products && Array.isArray(json.data.products) && json.data.products.length > 0) {
+        state.products = json.data.products;
+        localStorage.setItem("gz_products", JSON.stringify(state.products));
+      }
+
+      if (json.data.users && Array.isArray(json.data.users) && json.data.users.length > 0) {
         state.users = json.data.users;
         localStorage.setItem("gz_users", JSON.stringify(state.users));
       }
 
-      localStorage.setItem("gz_orders", JSON.stringify(state.orders));
-      localStorage.setItem("gz_clients", JSON.stringify(state.clients));
-      localStorage.setItem("gz_products", JSON.stringify(state.products));
-      localStorage.setItem("gz_users", JSON.stringify(state.users));
       // Detección automática de nueva versión emitida por el Administrador
       if (json.data.systemVersion) {
         const serverVer = String(json.data.systemVersion);
