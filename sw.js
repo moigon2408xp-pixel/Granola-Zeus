@@ -1,9 +1,10 @@
-const CACHE_NAME = 'granola-zeus-v1';
+const CACHE_NAME = 'zeus-granola-v2';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css?v=1',
-  './app.js?v=1',
+  './styles.css?v=2',
+  './app.js?v=2',
+  './logo_zeus.jpg',
   './manifest.webmanifest'
 ];
 
