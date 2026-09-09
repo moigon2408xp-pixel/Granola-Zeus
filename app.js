@@ -9,7 +9,7 @@
  */
 
 // URL del Backend Google Apps Script (Configurable desde Ajustes por el Administrador)
-const DEFAULT_API_URL = "https://script.google.com/macros/s/AKfycbwYOUR_DEPLOYED_URL_HERE/exec";
+const DEFAULT_API_URL = "https://script.google.com/macros/s/AKfycbwOeAmzuNHI4qGY3eRM2T8IR1y7n4b5lk8_y2oyGydsun_I2Z7a4LMJyy1IZbOMm0cbfQ/exec";
 let API_URL = localStorage.getItem("gz_api_url") || DEFAULT_API_URL;
 
 // Catálogo oficial de Granolas y Precios en Euros (€)
