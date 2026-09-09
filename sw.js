@@ -1,43 +1,154 @@
-const CACHE_NAME = 'zeus-granola-v2';
-const ASSETS = [
-  './',
-  './index.html',
-  './styles.css?v=2',
-  './app.js?v=2',
-  './logo_zeus.jpg',
-  './manifest.webmanifest'
-];
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Zeus Granola Fit – Control de Producción & Pedidos</title>
+  
+  <meta name="theme-color" content="#0d281a">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Zeus Granola">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/jpeg" href="logo_zeus.jpg">
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="styles.css?v=4">
+</head>
+<body>
 
-self.addEventListener('install', (e) => {
-  e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
-  );
-  self.skipWaiting();
-});
+  <!-- ==========================================
+       PANTALLA DE INICIO DE SESIÓN (LOGIN)
+       ========================================== -->
+  <div id="login-view" class="login-container">
+    <div class="login-card">
+      <div class="login-emblem-wrap">
+        <img src="logo_zeus.jpg" alt="Zeus Granola Fit" class="login-logo-img">
+      </div>
+      <h1 class="login-title">ZEUS GRANOLA FIT</h1>
+      <p class="login-subtitle">Sistema de Producción & Despacho</p>
 
-self.addEventListener('activate', (e) => {
-  e.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
-        keys.map((k) => {
-          if (k !== CACHE_NAME) return caches.delete(k);
-        })
-      );
-    })
-  );
-  self.clients.claim();
-});
+      <form id="form-login" class="login-form" onsubmit="handleLoginSubmit(event)">
+        <div class="form-group">
+          <label for="login-user">Usuario / Responsable</label>
+          <div class="input-icon-wrap">
+            <span class="input-icon">👤</span>
+            <select id="login-user" class="form-select" required>
+              <option value="Admin Zeus" data-role="manager" selected>Admin Zeus (Manager)</option>
+              <option value="Producción Zeus" data-role="worker">Producción Zeus (Taller)</option>
+            </select>
+          </div>
+        </div>
 
-self.addEventListener('fetch', (e) => {
-  if (e.request.method !== 'GET') return;
-  e.respondWith(
-    caches.match(e.request).then((cached) => {
-      const networked = fetch(e.request).then((res) => {
-        const resClone = res.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(e.request, resClone));
-        return res;
-      }).catch(() => cached);
-      return cached || networked;
-    })
-  );
-});
+        <div class="form-group">
+          <label for="login-password">Contraseña o PIN de Acceso</label>
+          <div class="input-icon-wrap">
+            <span class="input-icon">🔒</span>
+            <input 
+              type="password" 
+              id="login-password" 
+              class="form-input" 
+              placeholder="Ingresa tu contraseña o PIN" 
+              autocomplete="current-password"
+              required 
+            />
+          </div>
+          <small class="form-help">PIN predeterminado: <strong>1234</strong></small>
+        </div>
+
+        <button type="submit" id="btn-login-submit" class="btn-primary-gold">
+          <span>⚡ Iniciar Sesión</span>
+        </button>
+
+        <p id="login-error-msg" class="login-error" style="display:none;"></p>
+      </form>
+
+      <div class="login-footer">
+        <p>Zeus Granola Fit · 2025 · Calidad Artesanal</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================
+       APLICACIÓN PRINCIPAL (TRAS INICIAR SESIÓN)
+       ========================================== -->
+  <div id="app" class="app-container" style="display:none;">
+    <!-- Barra Superior -->
+    <header class="top-bar">
+      <div class="brand-area">
+        <img src="logo_zeus.jpg" alt="Zeus Logo" class="topbar-logo-img">
+        <div class="brand-text">
+          <h1 class="brand-title">ZEUS FIT <span class="brand-lightning">⚡</span></h1>
+          <p id="user-role-display" class="brand-sub">Admin Zeus · Manager</p>
+        </div>
+      </div>
+      
+      <div class="top-actions">
+        <button id="btn-force-update" class="icon-btn" onclick="forceCleanUpdate(true)" title="Actualizar aplicación y limpiar caché">🔄</button>
+        <button id="btn-sync" class="icon-btn" title="Sincronizar con Google Sheets">↻</button>
+        <button id="btn-theme" class="icon-btn" title="Modo Oscuro / Claro">🌙</button>
+        <button id="btn-logout" class="icon-btn icon-btn-danger" title="Cerrar Sesión">🚪</button>
+      </div>
+    </header>
+
+    <!-- Banner de Alertas Críticas -->
+    <div id="critical-banner-container"></div>
+
+    <!-- Barra de Navegación Inferior (5 pestañas móviles perfectas) -->
+    <nav class="nav-bar">
+      <button class="nav-btn active" data-tab="today">
+        <span class="nav-icon">⚡</span>
+        <span class="nav-label">Hoy</span>
+        <span id="badge-today-count" class="nav-count" style="display:none;">0</span>
+      </button>
+
+      <button class="nav-btn" data-tab="orders">
+        <span class="nav-icon">📋</span>
+        <span class="nav-label">Pedidos</span>
+        <span id="badge-orders-count" class="nav-count" style="display:none;">0</span>
+      </button>
+
+      <button class="nav-btn nav-btn-center" data-tab="new-order">
+        <div class="nav-btn-center-inner">
+          <span class="nav-icon">➕</span>
+        </div>
+        <span class="nav-label">Nuevo</span>
+      </button>
+
+      <button class="nav-btn" data-tab="finances">
+        <span class="nav-icon">💶</span>
+        <span class="nav-label">Finanzas</span>
+      </button>
+
+      <button class="nav-btn" data-tab="settings">
+        <span class="nav-icon">⚙️</span>
+        <span class="nav-label">Ajustes</span>
+      </button>
+    </nav>
+
+    <!-- Área de Contenido Principal -->
+    <main id="main-content" class="main-content">
+      <div class="loading-state">
+        <div class="spinner"></div>
+        <p>Cargando datos de Zeus Granola Fit...</p>
+      </div>
+    </main>
+  </div>
+
+  <!-- Modal Global -->
+  <div id="modal-overlay" class="modal-overlay" style="display:none;">
+    <div class="modal-box">
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Contenedor de Notificaciones Toast -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="app.js?v=4"></script>
+</body>
+</html>
