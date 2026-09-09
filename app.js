@@ -1,36 +1,51 @@
 /**
  * ============================================================================
- * ZEUS GRANOLA FIT – SISTEMA DE GESTIÓN Y PRODUCCIÓN (v2.0)
+ * ZEUS GRANOLA FIT – SISTEMA DE GESTIÓN Y PRODUCCIÓN (v2.1)
  * Frontend PWA Serverless (Vanilla JS + LocalStorage First)
- * Optimizado para móvil, moneda en Euros (€), catálogo con precios fijos
- * y constructor de pedidos con descuentos interactivos.
+ * Optimizado para móvil, moneda en Euros (€), catálogo con precios fijos,
+ * códigos secuenciales de 4 dígitos, gestión de clientes, catálogo,
+ * usuarios con cambio de PIN y plantilla de WhatsApp configurable.
  * ============================================================================
  */
 
-// URL fija del Backend Google Apps Script (Reemplazar una sola vez con la URL /exec desplegada)
+// URL del Backend Google Apps Script (Configurable desde Ajustes por el Administrador)
 const DEFAULT_API_URL = "https://script.google.com/macros/s/AKfycbwYOUR_DEPLOYED_URL_HERE/exec";
 let API_URL = localStorage.getItem("gz_api_url") || DEFAULT_API_URL;
 
 // Catálogo oficial de Granolas y Precios en Euros (€)
 const DEFAULT_PRODUCTS = [
-  { id: "PROD-1", nombre: "Granola en Barra", presentacion: "Barra artesanal", precio: 10.0 },
-  { id: "PROD-2", nombre: "Granola en Barra (con chocolate)", presentacion: "Barra artesanal", precio: 15.0 },
-  { id: "PROD-3", nombre: "Granola en Barra (sin pasitas)", presentacion: "Barra artesanal", precio: 10.0 },
-  { id: "PROD-4", nombre: "Granola tipo Cereal", presentacion: "Bolsa cereal", precio: 10.0 },
-  { id: "PROD-5", nombre: "Granola tipo Cereal (con chocolate)", presentacion: "Bolsa cereal", precio: 15.0 },
-  { id: "PROD-6", nombre: "Granola tipo Cereal (sin pasitas)", presentacion: "Bolsa cereal", precio: 10.0 }
+  { id: "PROD-1", nombre: "Granola en Barra", presentacion: "Barra artesanal", precio: 10.0, activo: true },
+  { id: "PROD-2", nombre: "Granola en Barra (con chocolate)", presentacion: "Barra artesanal", precio: 15.0, activo: true },
+  { id: "PROD-3", nombre: "Granola en Barra (sin pasitas)", presentacion: "Barra artesanal", precio: 10.0, activo: true },
+  { id: "PROD-4", nombre: "Granola tipo Cereal", presentacion: "Bolsa cereal", precio: 10.0, activo: true },
+  { id: "PROD-5", nombre: "Granola tipo Cereal (con chocolate)", presentacion: "Bolsa cereal", precio: 15.0, activo: true },
+  { id: "PROD-6", nombre: "Granola tipo Cereal (sin pasitas)", presentacion: "Bolsa cereal", precio: 10.0, activo: true }
 ];
 
-// Usuarios autorizados con contraseña/PIN predeterminado
+// Usuarios autorizados con PIN predeterminado
 const DEFAULT_USERS = [
-  { id: "USR-1", name: "Admin Zeus", role: "manager", pin: "1234" },
-  { id: "USR-2", name: "Producción Zeus", role: "worker", pin: "1234" }
+  { id: "USR-1", name: "Admin Zeus", role: "manager", pin: "1234", active: true },
+  { id: "USR-2", name: "Producción Zeus", role: "worker", pin: "1234", active: true }
 ];
 
-// Clientes iniciales con descuento habitual permanente
+// Clientes iniciales con descuento habitual
 const DEFAULT_CLIENTS = [
   { id: "CLI-1", nombre: "Cliente Frecuente 15%", telefono: "04124593653", tipoEntrega: "Delivery", direccion: "Zona Centro", descuentoFijo: 15 }
 ];
+
+// Plantilla predeterminada de WhatsApp
+const DEFAULT_WA_TEMPLATE = `¡Hola, {cliente}! 🥣 Te escribimos de *Zeus Granola Fit* ⚡
+
+Tu pedido *#{id}* ha sido procesado exitosamente.
+
+📋 *Detalle del Pedido:*
+{detalle}
+
+💰 *Total a Pagar:* {total}
+{entrega_info}
+📅 *Fecha de Entrega:* {fechaEntrega}
+
+¡Gracias por elegir nutrición artesanal y saludable! 💪⚡`;
 
 // Estado Global de la Aplicación
 const state = {
@@ -42,6 +57,7 @@ const state = {
   products: JSON.parse(localStorage.getItem("gz_products") || JSON.stringify(DEFAULT_PRODUCTS)),
   clients: JSON.parse(localStorage.getItem("gz_clients") || JSON.stringify(DEFAULT_CLIENTS)),
   users: JSON.parse(localStorage.getItem("gz_users") || JSON.stringify(DEFAULT_USERS)),
+  waTemplate: localStorage.getItem("gz_wa_template") || DEFAULT_WA_TEMPLATE,
   orderFilter: "all",
   searchQuery: "",
   newOrderCart: {}, // { prodId: quantity }
@@ -56,7 +72,21 @@ document.addEventListener("DOMContentLoaded", () => {
   checkAuth();
   bindGlobalEvents();
   registerServiceWorker();
+
+  // Polling automático cada 60s para chequear si el Administrador emitió una nueva versión
+  setInterval(checkForRemoteUpdate, 60000);
+
+  // Detección inmediata al volver a la pestaña o app
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      checkForRemoteUpdate();
+    }
+  });
 });
+
+function isManager() {
+  return state.user && (state.user.role === "manager" || state.user.name === "Admin Zeus");
+}
 
 function applyTheme(theme) {
   state.theme = theme;
@@ -73,17 +103,46 @@ function registerServiceWorker() {
 }
 
 // ============================================================================
+// GENERADOR DE CÓDIGO SECUENCIAL DE 4 DÍGITOS (IRREPETIBLE)
+// ============================================================================
+function generateNextOrderId() {
+  let highest = parseInt(localStorage.getItem("gz_last_seq") || "0", 10);
+  
+  const allOrders = [...state.orders, ...state.delivered];
+  allOrders.forEach(o => {
+    const m = String(o.id || "").match(/\d+/);
+    if (m) {
+      const num = parseInt(m[0], 10);
+      if (num > highest) highest = num;
+    }
+  });
+
+  const nextNum = highest + 1;
+  localStorage.setItem("gz_last_seq", String(nextNum));
+  return String(nextNum).padStart(4, "0"); // "0001", "0002", "0003", etc.
+}
+
+// ============================================================================
 // SISTEMA DE AUTENTICACIÓN (LOGIN & LOGOUT)
 // ============================================================================
 function checkAuth() {
   const loginView = document.getElementById("login-view");
   const appView = document.getElementById("app");
   const userRoleDisplay = document.getElementById("user-role-display");
+  const loginUserSelect = document.getElementById("login-user");
+
+  // Poblar select de usuarios en el login
+  if (loginUserSelect) {
+    loginUserSelect.innerHTML = state.users
+      .filter(u => u.active !== false)
+      .map(u => `<option value="${escapeHtml(u.name)}" ${state.user && state.user.name === u.name ? "selected" : ""}>${escapeHtml(u.name)} (${u.role === "manager" ? "Manager" : "Taller"})</option>`)
+      .join("");
+  }
 
   if (state.user) {
     if (loginView) loginView.style.display = "none";
     if (appView) appView.style.display = "flex";
-    if (userRoleDisplay) userRoleDisplay.textContent = `${state.user.name} · ${state.user.role === "manager" ? "Manager" : "Taller"}`;
+    if (userRoleDisplay) userRoleDisplay.textContent = `${state.user.name} · ${isManager() ? "👑 Manager" : "Taller"}`;
     renderCurrentTab();
   } else {
     if (loginView) loginView.style.display = "flex";
@@ -97,7 +156,7 @@ window.handleLoginSubmit = function(e) {
   const password = document.getElementById("login-password").value.trim();
   const errorMsg = document.getElementById("login-error-msg");
 
-  const foundUser = state.users.find(u => u.name.toLowerCase() === userName.toLowerCase());
+  const foundUser = state.users.find(u => u.name.toLowerCase() === userName.toLowerCase() && u.active !== false);
   
   if (foundUser && (password === foundUser.pin || password === "1234" || password === "zeus2025")) {
     state.user = foundUser;
@@ -126,7 +185,6 @@ function doLogout() {
 // ENLACE DE EVENTOS GLOBALES
 // ============================================================================
 function bindGlobalEvents() {
-  // Cambio de pestaña inferior (5 pestañas)
   document.querySelectorAll(".nav-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const tab = btn.getAttribute("data-tab");
@@ -134,7 +192,6 @@ function bindGlobalEvents() {
     });
   });
 
-  // Botón modo oscuro/claro
   const btnTheme = document.getElementById("btn-theme");
   if (btnTheme) {
     btnTheme.addEventListener("click", () => {
@@ -142,13 +199,11 @@ function bindGlobalEvents() {
     });
   }
 
-  // Botón Sincronizar
   const btnSync = document.getElementById("btn-sync");
   if (btnSync) {
     btnSync.addEventListener("click", () => syncWithSheets(true));
   }
 
-  // Botón Logout
   const btnLogout = document.getElementById("btn-logout");
   if (btnLogout) {
     btnLogout.addEventListener("click", doLogout);
@@ -222,7 +277,6 @@ function renderTodayView(container) {
   const readyOrders = state.orders.filter(o => o.estado === "Listo para Despacho");
 
   let totalTodaySales = todayOrders.reduce((sum, o) => sum + Number(o.totalEur || o.totalUsd || 0), 0);
-  let totalDeliveredAll = state.delivered.reduce((sum, o) => sum + Number(o.totalEur || o.totalUsd || 0), 0);
 
   container.innerHTML = `
     <div class="view-header">
@@ -293,7 +347,7 @@ function renderTodayView(container) {
 }
 
 // ============================================================================
-// 2. PESTAÑA PEDIDOS / PRODUCCIÓN (📋 TABLERO)
+// 2. PESTAÑA PEDIDOS (📋 TABLERO)
 // ============================================================================
 function renderOrdersView(container) {
   let filtered = state.orders.filter(o => o.estado !== "Entregado");
@@ -367,7 +421,7 @@ window.handleOrderSearch = function(val) {
   renderOrdersView(document.getElementById("main-content"));
 };
 
-// Generador de Tarjeta de Pedido
+// Generador de Tarjeta de Pedido con Fechas Claras (Solicitado vs Entrega)
 function renderOrderCardHtml(o) {
   const statusClass = 
     o.estado === "En Espera" ? "status-pending" :
@@ -376,24 +430,32 @@ function renderOrderCardHtml(o) {
 
   const total = Number(o.totalEur || o.totalUsd || 0);
   const discountStr = o.descuentoPorcentaje ? ` (${o.descuentoPorcentaje}% desc.)` : "";
+  const isDelivery = o.tipoEntrega && o.tipoEntrega.toLowerCase().includes("delivery");
 
   return `
     <div class="order-card" id="card-${o.id}">
       <div class="order-card-header">
         <div>
-          <span class="order-id-badge">${o.id}</span>
+          <span class="order-id-badge">N° ${o.id}</span>
           <h4 class="order-client-name">${escapeHtml(o.cliente)}</h4>
         </div>
         <span class="status-badge ${statusClass}">${o.estado}</span>
+      </div>
+
+      <!-- Fechas de Solicitud y Entrega -->
+      <div class="order-dates-row">
+        <span>📝 <strong>Pedido el:</strong> ${o.fechaSolicitudTexto || (o.fechaCreacion ? o.fechaCreacion.split("T")[0] : "Hoy")}</span>
+        <span>🚚 <strong>Entrega:</strong> ${o.fechaEntrega || "Por definir"} ${o.horaEntrega ? `(${o.horaEntrega})` : ""}</span>
       </div>
 
       <div class="order-card-products">
         <strong>Detalle:</strong> ${escapeHtml(o.productosDetalle)}
       </div>
 
-      <div style="font-size:12px; color:var(--text-muted); display:flex; justify-content:space-between;">
-        <span>📅 Entrega: <strong>${o.fechaEntrega || "Sin fecha"} ${o.horaEntrega || ""}</strong></span>
-        <span>🚚 ${escapeHtml(o.tipoEntrega || "Pickup")}</span>
+      <div style="font-size:12px; color:var(--text-muted); display:flex; flex-direction:column; gap:2px;">
+        <div>
+          ${isDelivery ? `<strong>🚚 Delivery a:</strong> ${escapeHtml(o.zonaDireccion || "Dirección pendiente")}` : `<strong>🏬 Retiro:</strong> En Taller / Tienda`}
+        </div>
       </div>
 
       ${o.notas ? `<div style="font-size:12px; color:var(--gold); font-style:italic;">📝 ${escapeHtml(o.notas)}</div>` : ""}
@@ -423,7 +485,6 @@ function renderOrderCardHtml(o) {
 // 3. PESTAÑA NUEVO PEDIDO (➕ CONSTRUCTOR CON DESCUENTOS Y CONTADORES)
 // ============================================================================
 function renderNewOrderView(container) {
-  // Inicializar carrito si está vacío
   if (!state.newOrderCart) state.newOrderCart = {};
 
   const subtotal = calculateCartSubtotal();
@@ -434,7 +495,7 @@ function renderNewOrderView(container) {
     <div class="view-header">
       <div>
         <h2 class="view-title">➕ Armar Nuevo Pedido</h2>
-        <p class="view-sub">Precios en Euros (€) · Descuentos en 1 toque</p>
+        <p class="view-sub">Precios en Euros (€) · Código de 4 dígitos automático</p>
       </div>
     </div>
 
@@ -468,15 +529,15 @@ function renderNewOrderView(container) {
 
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
           <div class="form-group">
-            <label>Tipo de Entrega</label>
-            <select id="order-delivery-type" class="form-select" style="padding-left:12px;">
-              <option value="Pickup (Retiro en Taller)">Retiro en Taller (Pickup)</option>
-              <option value="Delivery">Delivery / Envío</option>
+            <label>Tipo de Entrega *</label>
+            <select id="order-delivery-type" class="form-select" style="padding-left:12px;" onchange="handleDeliveryTypeChange(this.value)">
+              <option value="Delivery" selected>🚚 Envío a Domicilio (Delivery)</option>
+              <option value="Pickup">🏬 Retiro en Taller / Tienda</option>
             </select>
           </div>
-          <div class="form-group">
-            <label>Dirección / Zona</label>
-            <input type="text" id="order-address" class="form-input" style="padding-left:12px;" placeholder="Ej. Calle 72 con Bella Vista" />
+          <div class="form-group" id="group-delivery-address">
+            <label>Dirección Exacta de Envío *</label>
+            <input type="text" id="order-address" class="form-input" style="padding-left:12px;" placeholder="Calle, sector, punto de referencia" />
           </div>
         </div>
       </div>
@@ -489,7 +550,7 @@ function renderNewOrderView(container) {
         </p>
 
         <div class="product-items-list">
-          ${state.products.map(p => {
+          ${state.products.filter(p => p.activo !== false).map(p => {
             const qty = state.newOrderCart[p.id] || 0;
             const isSelected = qty > 0;
             return `
@@ -543,30 +604,46 @@ function renderNewOrderView(container) {
 
       <!-- Sección 3: Fecha y Observaciones -->
       <div class="order-builder-card">
-        <h3 class="builder-section-title">📅 3. Entrega & Notas</h3>
+        <h3 class="builder-section-title">📅 3. Entrega & Observaciones</h3>
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
           <div class="form-group">
-            <label>Fecha de Entrega</label>
+            <label>Fecha de Entrega Requerida *</label>
             <input type="date" id="order-delivery-date" class="form-input" style="padding-left:12px;" value="${getTodayYmd()}" required />
           </div>
           <div class="form-group">
             <label>Hora Estimada</label>
-            <input type="time" id="order-delivery-time" class="form-input" style="padding-left:12px;" value="14:00" />
+            <input type="time" id="order-delivery-time" class="form-input" style="padding-left:12px;" value="15:00" />
           </div>
         </div>
 
         <div class="form-group">
           <label>Notas Especiales / Observaciones</label>
-          <input type="text" id="order-notes" class="form-input" style="padding-left:12px;" placeholder="Ej. Empacar para regalo, entregar después de las 3pm" />
+          <input type="text" id="order-notes" class="form-input" style="padding-left:12px;" placeholder="Ej. Entregar en portería, empaque para obsequio" />
         </div>
 
         <button type="submit" id="btn-save-order" class="btn-primary-gold" style="margin-top:16px;">
-          <span>💾 Guardar Pedido (${formatMoney(finalTotal)})</span>
+          <span>💾 Registrar Pedido (${formatMoney(finalTotal)})</span>
         </button>
       </div>
     </form>
   `;
 }
+
+window.handleDeliveryTypeChange = function(val) {
+  const addrGroup = document.getElementById("group-delivery-address");
+  const addrInput = document.getElementById("order-address");
+  if (!addrGroup || !addrInput) return;
+
+  if (val === "Delivery") {
+    addrGroup.style.display = "flex";
+    addrInput.placeholder = "Calle, sector, punto de referencia";
+    addrInput.required = true;
+  } else {
+    addrGroup.style.display = "none";
+    addrInput.value = "";
+    addrInput.required = false;
+  }
+};
 
 window.updateCartItem = function(prodId, delta) {
   if (!state.newOrderCart) state.newOrderCart = {};
@@ -577,7 +654,6 @@ window.updateCartItem = function(prodId, delta) {
   } else {
     state.newOrderCart[prodId] = updated;
   }
-  // Re-renderizar vista para actualizar contadores y sumas
   renderNewOrderView(document.getElementById("main-content"));
 };
 
@@ -609,9 +685,11 @@ window.handleClientSelect = function(clientId) {
     if (nameInput) nameInput.value = client.nombre;
     if (phoneInput) phoneInput.value = client.telefono || "";
     if (addrInput) addrInput.value = client.direccion || "";
-    if (deliverySelect && client.tipoEntrega) deliverySelect.value = client.tipoEntrega;
+    if (deliverySelect && client.tipoEntrega) {
+      deliverySelect.value = client.tipoEntrega;
+      handleDeliveryTypeChange(client.tipoEntrega);
+    }
 
-    // Si el cliente tiene descuento habitual (ej. 15%), aplicarlo de inmediato
     if (client.descuentoFijo) {
       setOrderDiscount(client.descuentoFijo);
       showToast(`⭐ Descuento habitual del ${client.descuentoFijo}% aplicado a ${client.nombre}`);
@@ -631,7 +709,7 @@ window.handleCreateOrderSubmit = async function(e) {
   const clientName = document.getElementById("order-client-name").value.trim();
   const clientPhone = document.getElementById("order-client-phone").value.trim();
   const deliveryType = document.getElementById("order-delivery-type").value;
-  const address = document.getElementById("order-address").value.trim();
+  const address = document.getElementById("order-address") ? document.getElementById("order-address").value.trim() : "";
   const deliveryDate = document.getElementById("order-delivery-date").value;
   const deliveryTime = document.getElementById("order-delivery-time").value;
   const notes = document.getElementById("order-notes").value.trim();
@@ -649,11 +727,17 @@ window.handleCreateOrderSubmit = async function(e) {
   const discountAmount = (subtotal * (state.newOrderDiscount / 100));
   const finalTotal = Math.max(0, subtotal - discountAmount);
 
-  const newId = `ZEUS-${String(state.orders.length + state.delivered.length + 1).padStart(4, "0")}`;
+  // Código correlativo estricto de 4 dígitos (0001, 0002, etc.)
+  const newId = generateNextOrderId();
+  const now = new Date();
+  const fechaSolicitud = now.toISOString();
+  const fechaSolicitudTexto = formatDateFriendly(getTodayYmd());
 
   const orderPayload = {
     id: newId,
-    fechaCreacion: new Date().toISOString(),
+    fechaCreacion: fechaSolicitud,
+    fechaSolicitud: fechaSolicitud,
+    fechaSolicitudTexto: fechaSolicitudTexto,
     cliente: clientName,
     telefono: clientPhone,
     tipoEntrega: deliveryType,
@@ -692,9 +776,9 @@ window.handleCreateOrderSubmit = async function(e) {
   state.newOrderCart = {};
   state.newOrderDiscount = 0;
 
-  showToast(`✅ Pedido ${newId} guardado con éxito (${formatMoney(finalTotal)})`);
+  showToast(`✅ Pedido N° ${newId} registrado con éxito (${formatMoney(finalTotal)})`);
 
-  // Intentar sincronización con Google Sheets en segundo plano
+  // Intentar sincronización con Google Sheets
   syncSingleOrderToSheets(orderPayload);
 
   // Ir al tablero de pedidos
@@ -792,18 +876,70 @@ function renderFinancesView(container) {
 }
 
 // ============================================================================
-// 5. PESTAÑA AJUSTES (⚙ CLIENTES, CATÁLOGO, BACKUP & SIN URL EDITABLE)
+// 5. PESTAÑA AJUSTES (⚙ CLIENTES, CATÁLOGO, PERMISOS ADMIN & SEGURIDAD)
 // ============================================================================
 function renderSettingsView(container) {
+  const manager = isManager();
+
   container.innerHTML = `
     <div class="view-header">
       <div>
         <h2 class="view-title">⚙️ Ajustes del Sistema</h2>
-        <p class="view-sub">Zeus Granola Fit · Taller Artesanal</p>
+        <p class="view-sub">${state.user ? state.user.name : "Usuario"} · ${manager ? "👑 Administrador" : "Operador"}</p>
       </div>
     </div>
 
-    <!-- Clientes Frecuentes y Descuentos Permanentes -->
+    <!-- 1. Conexión con Google Sheets (SOLO ADMINISTRADOR) -->
+    ${manager ? `
+      <div class="card" style="border:1.5px solid var(--gold);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h3 class="builder-section-title" style="margin:0;">🔗 Conexión con Google Sheets</h3>
+          <span class="admin-badge">👑 Solo Administrador</span>
+        </div>
+        <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:10px;">
+          Pega aquí el enlace de tu Web App de Google Apps Script (el que termina en <code>/exec</code>) para sincronizar en tiempo real con tu hoja de Google Drive.
+        </p>
+        <div class="form-group" style="margin-bottom:10px;">
+          <input 
+            type="url" 
+            id="admin-api-url-input" 
+            class="form-input" 
+            style="padding-left:12px; font-family:var(--font-mono); font-size:12px;" 
+            placeholder="https://script.google.com/macros/s/.../exec" 
+            value="${API_URL.includes("YOUR_DEPLOYED_URL_HERE") ? "" : escapeHtml(API_URL)}" 
+          />
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn-primary-gold" style="flex:1; margin:0; padding:10px;" onclick="saveApiUrlFromAdmin()">
+            💾 Guardar y Conectar
+          </button>
+          <button class="btn-action-sm ready" style="padding:10px 14px;" onclick="syncWithSheets(true)">
+            ↻ Probar Conexión
+          </button>
+        </div>
+      </div>
+    ` : ""}
+
+    <!-- 2. Seguridad Personal (PARA CUALQUIER USUARIO: CAMBIO DE PIN) -->
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <h3 class="builder-section-title" style="margin:0;">🔐 Mi Seguridad</h3>
+        <span style="font-size:11px; color:var(--gold); font-weight:700;">PIN Personal</span>
+      </div>
+      <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px;">
+        Usuario activo: <strong>${state.user ? state.user.name : ""}</strong>. Puedes cambiar tu contraseña o PIN de acceso en cualquier momento.
+      </p>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <button class="btn-action-sm ready" onclick="openChangePinModal()">
+          🔑 Cambiar mi Contraseña / PIN
+        </button>
+        <button class="btn-action-sm" onclick="forceCleanUpdate(true)">
+          🔄 Forzar Actualización y Limpiar Caché Local
+        </button>
+      </div>
+    </div>
+
+    <!-- 3. Clientes Frecuentes (EDITABLE/ELIMINABLE SOLO POR ADMIN) -->
     <div class="card">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <h3 class="builder-section-title" style="margin:0;">👥 Directorio de Clientes (${state.clients.length})</h3>
@@ -818,20 +954,31 @@ function renderSettingsView(container) {
               <div style="font-size:12px; color:var(--text-muted);">
                 📞 ${escapeHtml(c.telefono || "Sin tlf")} · ${c.direccion ? escapeHtml(c.direccion) : "Sin dirección"}
               </div>
-            </div>
-            <div style="text-align:right;">
-              <span class="status-badge" style="background:rgba(212,175,55,0.15); color:var(--gold); border:1px solid var(--gold);">
+              <span class="status-badge" style="background:rgba(212,175,55,0.15); color:var(--gold); border:1px solid var(--gold); margin-top:4px; display:inline-block;">
                 ${c.descuentoFijo || 0}% Descuento
               </span>
             </div>
+            
+            ${manager ? `
+              <div style="display:flex; gap:6px; align-items:center;">
+                <button class="btn-icon-action" onclick="openEditClientModal('${c.id}')" title="Editar Cliente">✏️</button>
+                <button class="btn-icon-action danger" onclick="deleteClient('${c.id}')" title="Eliminar Cliente">🗑️</button>
+              </div>
+            ` : ""}
           </div>
         `).join("")}
       </div>
     </div>
 
-    <!-- Catálogo de Granolas -->
+    <!-- 4. Catálogo de Granolas (MODIFICAR/AÑADIR/ELIMINAR SOLO POR ADMIN) -->
     <div class="card">
-      <h3 class="builder-section-title">🥣 Catálogo Oficial de Granolas (6 Tipos)</h3>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 class="builder-section-title" style="margin:0;">🥣 Catálogo de Granolas (${state.products.length})</h3>
+        ${manager ? `
+          <button class="btn-action-sm ready" onclick="openNewProductModal()">➕ Añadir Granola</button>
+        ` : ""}
+      </div>
+
       <div style="display:flex; flex-direction:column; gap:8px;">
         ${state.products.map(p => `
           <div style="background:var(--bg-app); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
@@ -839,30 +986,133 @@ function renderSettingsView(container) {
               <strong>${escapeHtml(p.nombre)}</strong>
               <div style="font-size:12px; color:var(--text-muted);">${escapeHtml(p.presentacion || "")}</div>
             </div>
-            <div style="font-size:16px; font-weight:800; font-family:var(--font-mono); color:var(--gold);">
-              ${formatMoney(p.precio)}
+            
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span style="font-size:16px; font-weight:800; font-family:var(--font-mono); color:var(--gold);">
+                ${formatMoney(p.precio)}
+              </span>
+              ${manager ? `
+                <div style="display:flex; gap:6px;">
+                  <button class="btn-icon-action" onclick="openEditProductModal('${p.id}')" title="Editar Precio o Nombre">✏️</button>
+                  <button class="btn-icon-action danger" onclick="deleteProduct('${p.id}')" title="Eliminar del Catálogo">🗑️</button>
+                </div>
+              ` : ""}
             </div>
           </div>
         `).join("")}
       </div>
     </div>
 
-    <!-- Copia de Seguridad & Restauración -->
-    <div class="card">
-      <h3 class="builder-section-title">💾 Respaldo y Restauración de Datos</h3>
-      <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px;">
-        Descarga una copia completa en formato JSON o restaura un archivo previo de Granola Zeus.
-      </p>
-      <div style="display:flex; gap:10px;">
-        <button class="btn-action-sm ready" style="flex:1; justify-content:center; padding:10px;" onclick="exportZeusBackup()">
-          📥 Descargar Copia JSON
-        </button>
-        <label class="btn-action-sm" style="flex:1; justify-content:center; padding:10px; cursor:pointer;">
-          📤 Restaurar Copia
-          <input type="file" accept=".json" onchange="importZeusBackup(event)" style="display:none;" />
-        </label>
+    <!-- 5. Gestión de Usuarios y Perfiles (SOLO ADMINISTRADOR) -->
+    ${manager ? `
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <div>
+            <h3 class="builder-section-title" style="margin:0;">👥 Equipo & Perfiles de Usuario</h3>
+            <span class="admin-badge" style="margin-top:4px;">👑 Solo Administrador</span>
+          </div>
+          <button class="btn-action-sm ready" onclick="openNewUserModal()">➕ Nuevo Perfil</button>
+        </div>
+
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          ${state.users.map(u => `
+            <div style="background:var(--bg-app); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
+              <div>
+                <strong>${escapeHtml(u.name)}</strong>
+                <div style="font-size:12px; color:var(--text-muted);">
+                  Rol: <strong>${u.role === "manager" ? "Manager / Administrador" : "Operador Taller"}</strong>
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="status-badge" style="background:rgba(16,185,129,0.15); color:var(--emerald);">
+                  ${u.pin ? "PIN Activo" : "Sin PIN"}
+                </span>
+                ${u.id !== state.user.id ? `
+                  <button class="btn-icon-action danger" onclick="deleteUser('${u.id}')" title="Eliminar Usuario">🗑️</button>
+                ` : ""}
+              </div>
+            </div>
+          `).join("")}
+        </div>
       </div>
-    </div>
+    ` : ""}
+
+    <!-- 6. Editor de Plantilla de WhatsApp (SOLO ADMINISTRADOR) -->
+    ${manager ? `
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h3 class="builder-section-title" style="margin:0;">💬 Plantilla de Mensaje WhatsApp</h3>
+          <span class="admin-badge">👑 Solo Administrador</span>
+        </div>
+        <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:10px;">
+          Personaliza el mensaje que se enviará automáticamente a los clientes. Las etiquetas entre llaves se sustituyen solas.
+        </p>
+        
+        <textarea id="wa-template-input" class="whatsapp-template-box">${escapeHtml(state.waTemplate)}</textarea>
+
+        <div class="variables-pill-list">
+          <span class="variable-pill" onclick="insertWaTag('{cliente}')">+{cliente}</span>
+          <span class="variable-pill" onclick="insertWaTag('{id}')">+{id}</span>
+          <span class="variable-pill" onclick="insertWaTag('{detalle}')">+{detalle}</span>
+          <span class="variable-pill" onclick="insertWaTag('{total}')">+{total}</span>
+          <span class="variable-pill" onclick="insertWaTag('{entrega_info}')">+{entrega_info}</span>
+          <span class="variable-pill" onclick="insertWaTag('{fechaEntrega}')">+{fechaEntrega}</span>
+        </div>
+
+        <div style="display:flex; gap:8px; margin-top:12px;">
+          <button class="btn-primary-gold" style="flex:1; margin:0; padding:10px;" onclick="saveWhatsAppTemplate()">
+            💾 Guardar Plantilla
+          </button>
+          <button class="btn-action-sm" style="padding:10px 12px;" onclick="resetWhatsAppTemplate()">
+            ↺ Restaurar
+          </button>
+        </div>
+      </div>
+    ` : ""}
+
+    <!-- 7. Copia de Seguridad & Restauración (SOLO ADMINISTRADOR) -->
+    ${manager ? `
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h3 class="builder-section-title" style="margin:0;">💾 Respaldo y Restauración de Datos</h3>
+          <span class="admin-badge">👑 Solo Administrador</span>
+        </div>
+        <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px;">
+          Descarga una copia completa en formato JSON o restaura un archivo previo de Granola Zeus.
+        </p>
+        <div style="display:flex; gap:10px;">
+          <button class="btn-action-sm ready" style="flex:1; justify-content:center; padding:10px;" onclick="exportZeusBackup()">
+            📥 Descargar Copia JSON
+          </button>
+          <label class="btn-action-sm" style="flex:1; justify-content:center; padding:10px; cursor:pointer;">
+            📤 Restaurar Copia
+            <input type="file" accept=".json" onchange="importZeusBackup(event)" style="display:none;" />
+          </label>
+        </div>
+      </div>
+    ` : ""}
+
+    <!-- 8. Actualización Global de Dispositivos (SOLO ADMINISTRADOR) -->
+    ${manager ? `
+      <div class="card" style="border:1.5px solid var(--gold); background: linear-gradient(135deg, rgba(212,175,55,0.08) 0%, var(--bg-card) 100%);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h3 class="builder-section-title" style="margin:0; color:var(--gold);">🚀 Actualización Global de Dispositivos</h3>
+          <span class="admin-badge">👑 Solo Administrador</span>
+        </div>
+        <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px; line-height:1.45;">
+          ¿Hiciste cambios en el código o publicaste una nueva versión en GitHub Pages? Presiona este botón para ordenar a <strong>todas las sesiones y dispositivos conectados</strong> (teléfonos del taller, tablets, computadoras) que se actualicen inmediatamente sin tener que desinstalar la app ni borrar la caché de Chrome a mano.
+        </p>
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; padding:8px 12px; background:var(--bg-app); border-radius:var(--radius-sm); border:1px solid var(--border-color);">
+          <span style="font-size:12px; color:var(--text-muted);">Versión del sistema:</span>
+          <span style="font-size:12px; font-family:var(--font-mono); font-weight:700; color:var(--gold);">
+            ${localStorage.getItem("gz_system_version") || "v1.0 (Inicial)"}
+          </span>
+        </div>
+        <button class="btn-primary-gold" style="margin:0;" onclick="publishGlobalUpdate()">
+          <span>🚀 Emitir Actualización a Todos los Dispositivos</span>
+        </button>
+      </div>
+    ` : ""}
 
     <!-- Sesión y Acerca de -->
     <div class="card" style="text-align:center;">
@@ -877,33 +1127,50 @@ function renderSettingsView(container) {
 }
 
 // ============================================================================
-// GESTIÓN DE ACCIONES DE PEDIDOS (AVANCE DE ESTADO & WHATSAPP)
+// CONEXIÓN API ADMIN
 // ============================================================================
-window.advanceOrderStatus = function(orderId) {
-  const order = state.orders.find(o => o.id === orderId);
-  if (!order) return;
+window.saveApiUrlFromAdmin = function() {
+  const input = document.getElementById("admin-api-url-input");
+  if (!input) return;
+  const url = input.value.trim();
 
-  if (order.estado === "En Espera") {
-    order.estado = "En Producción";
-    showToast(`🥣 Pedido ${order.id} pasó a Producción`);
-  } else if (order.estado === "En Producción") {
-    order.estado = "Listo para Despacho";
-    showToast(`📦 Pedido ${order.id} listo para despacho`);
-  } else if (order.estado === "Listo para Despacho") {
-    if (confirm(`¿Marcar pedido ${order.id} como ENTREGADO y COBRADO?`)) {
-      order.estado = "Entregado";
-      order.fechaEntregaReal = new Date().toISOString();
-      // Mover a entregados
-      state.orders = state.orders.filter(o => o.id !== orderId);
-      state.delivered.unshift(order);
-      localStorage.setItem("gz_delivered", JSON.stringify(state.delivered));
-      showToast(`🎉 ¡Pedido ${order.id} entregado y registrado en Finanzas!`);
-    }
+  if (!url || !url.startsWith("https://script.google.com/")) {
+    alert("Por favor ingresa una URL válida de Google Apps Script que comience con https://script.google.com/");
+    return;
   }
 
-  localStorage.setItem("gz_orders", JSON.stringify(state.orders));
-  renderCurrentTab();
-  syncSingleOrderToSheets(order);
+  API_URL = url;
+  localStorage.setItem("gz_api_url", url);
+  showToast("✅ URL de Google Apps Script guardada con éxito.");
+  syncWithSheets(true);
+};
+
+// ============================================================================
+// PLANTILLA DE WHATSAPP
+// ============================================================================
+window.insertWaTag = function(tag) {
+  const box = document.getElementById("wa-template-input");
+  if (!box) return;
+  box.value += tag;
+  box.focus();
+};
+
+window.saveWhatsAppTemplate = function() {
+  const box = document.getElementById("wa-template-input");
+  if (!box) return;
+  state.waTemplate = box.value;
+  localStorage.setItem("gz_wa_template", state.waTemplate);
+  showToast("✅ Plantilla de WhatsApp guardada.");
+};
+
+window.resetWhatsAppTemplate = function() {
+  if (confirm("¿Restaurar la plantilla predeterminada de WhatsApp?")) {
+    state.waTemplate = DEFAULT_WA_TEMPLATE;
+    localStorage.setItem("gz_wa_template", DEFAULT_WA_TEMPLATE);
+    const box = document.getElementById("wa-template-input");
+    if (box) box.value = DEFAULT_WA_TEMPLATE;
+    showToast("Plantilla restaurada.");
+  }
 };
 
 window.openWhatsAppNotify = function(orderId) {
@@ -916,123 +1183,59 @@ window.openWhatsAppNotify = function(orderId) {
   const cleanPhone = order.telefono.replace(/\D/g, "");
   const total = formatMoney(order.totalEur || order.totalUsd || 0);
 
-  let msg = `¡Hola, ${order.cliente}! 🥣 Te escribimos de *Zeus Granola Fit* ⚡\n\n`;
-  if (order.estado === "Listo para Despacho") {
-    msg += `Tu pedido *${order.id}* ya está *LISTO* para su entrega.\n`;
+  // Determinar texto de entrega diferenciando claramente Delivery vs Pickup
+  let entregaTexto = "";
+  const isDelivery = order.tipoEntrega && (order.tipoEntrega.toLowerCase().includes("delivery") || order.tipoEntrega.toLowerCase().includes("envío"));
+  if (isDelivery) {
+    entregaTexto = `🚚 *Método de Entrega:* Envío a Domicilio (Delivery)\n📍 *Dirección de Entrega:* ${order.zonaDireccion || "Por coordinar"}`;
   } else {
-    msg += `Estamos procesando tu pedido *${order.id}*.\n`;
+    entregaTexto = `🏬 *Método de Entrega:* Retiro en Taller / Tienda (Pickup)`;
   }
-  msg += `\n*Detalle:* ${order.productosDetalle}\n`;
-  msg += `*Total a pagar:* ${total}\n`;
-  msg += `*Entrega:* ${order.tipoEntrega} - ${order.fechaEntrega || "Hoy"}\n\n`;
-  msg += `¡Gracias por elegir calidad artesanal y saludable! 💪`;
+
+  const template = state.waTemplate || DEFAULT_WA_TEMPLATE;
+  const msg = template
+    .replace(/{cliente}/g, order.cliente || "Cliente")
+    .replace(/{id}/g, order.id)
+    .replace(/{detalle}/g, order.productosDetalle || "")
+    .replace(/{total}/g, total)
+    .replace(/{entrega_info}/g, entregaTexto)
+    .replace(/{fechaEntrega}/g, `${order.fechaEntrega || "Hoy"} ${order.horaEntrega ? `(${order.horaEntrega})` : ""}`);
 
   const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
   window.open(url, "_blank");
 };
 
 // ============================================================================
-// SINCRONIZACIÓN CON GOOGLE SHEETS BACKEND
+// GESTIÓN DE ACCIONES DE PEDIDOS
 // ============================================================================
-async function syncSingleOrderToSheets(order) {
-  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) return;
-  try {
-    await fetch(API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({
-        action: "create_order",
-        data: order
-      })
-    });
-  } catch (err) {
-    console.warn("Sincronización en segundo plano pendiente:", err);
-  }
-}
+window.advanceOrderStatus = function(orderId) {
+  const order = state.orders.find(o => o.id === orderId);
+  if (!order) return;
 
-async function syncWithSheets(interactive = false) {
-  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) {
-    if (interactive) showToast("ℹ️ Modo Local / Offline activo.");
-    return;
-  }
-
-  if (interactive) showToast("Sincronizando con Google Sheets...");
-  try {
-    const res = await fetch(API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action: "dashboard" })
-    });
-    const json = await res.json();
-    if (json.ok && json.data) {
-      if (json.data.orders) state.orders = json.data.orders;
-      if (json.data.clients) state.clients = json.data.clients;
-      localStorage.setItem("gz_orders", JSON.stringify(state.orders));
-      localStorage.setItem("gz_clients", JSON.stringify(state.clients));
-      if (interactive) showToast("✅ ¡Datos actualizados desde Google Sheets!");
-      renderCurrentTab();
-    }
-  } catch (err) {
-    if (interactive) showToast("⚠️ No se pudo conectar con Sheets. Usando datos locales.");
-  }
-}
-
-// ============================================================================
-// EXPORTACIÓN & IMPORTACIÓN DE BACKUPS (COMPATIBLE CON ARCHIVO DEL USUARIO)
-// ============================================================================
-window.exportZeusBackup = function() {
-  const backupData = {
-    users: state.users,
-    orders: state.orders,
-    delivered: state.delivered,
-    clients: state.clients,
-    products: state.products,
-    exported_at: new Date().toISOString()
-  };
-
-  const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `backup_granola_zeus_${getTodayYmd()}.json`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  showToast("📥 Copia de seguridad descargada.");
-};
-
-window.importZeusBackup = function(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    try {
-      const data = JSON.parse(e.target.result);
-      if (data.products && Array.isArray(data.products)) state.products = data.products;
-      if (data.orders && Array.isArray(data.orders)) state.orders = data.orders;
-      if (data.delivered && Array.isArray(data.delivered)) state.delivered = data.delivered;
-      if (data.clients && Array.isArray(data.clients)) state.clients = data.clients;
-      if (data.users && Array.isArray(data.users)) state.users = data.users;
-
-      localStorage.setItem("gz_products", JSON.stringify(state.products));
-      localStorage.setItem("gz_orders", JSON.stringify(state.orders));
+  if (order.estado === "En Espera") {
+    order.estado = "En Producción";
+    showToast(`🥣 Pedido N° ${order.id} pasó a Producción`);
+  } else if (order.estado === "En Producción") {
+    order.estado = "Listo para Despacho";
+    showToast(`📦 Pedido N° ${order.id} listo para despacho`);
+  } else if (order.estado === "Listo para Despacho") {
+    if (confirm(`¿Marcar pedido N° ${order.id} como ENTREGADO y COBRADO?`)) {
+      order.estado = "Entregado";
+      order.fechaEntregaReal = new Date().toISOString();
+      state.orders = state.orders.filter(o => o.id !== orderId);
+      state.delivered.unshift(order);
       localStorage.setItem("gz_delivered", JSON.stringify(state.delivered));
-      localStorage.setItem("gz_clients", JSON.stringify(state.clients));
-      localStorage.setItem("gz_users", JSON.stringify(state.users));
-
-      showToast("✅ ¡Copia de seguridad restaurada con éxito!");
-      renderCurrentTab();
-    } catch (err) {
-      alert("Error al leer el archivo JSON: formato inválido.");
+      showToast(`🎉 ¡Pedido N° ${order.id} entregado y registrado en Finanzas!`);
     }
-  };
-  reader.readAsText(file);
+  }
+
+  localStorage.setItem("gz_orders", JSON.stringify(state.orders));
+  renderCurrentTab();
+  syncSingleOrderToSheets(order);
 };
 
 // ============================================================================
-// MODAL NUEVO CLIENTE
+// MODALES Y CRUD PARA CLIENTES (SOLO ADMIN PUEDE EDITAR Y BORRAR)
 // ============================================================================
 window.openNewClientModal = function() {
   const overlay = document.getElementById("modal-overlay");
@@ -1041,7 +1244,7 @@ window.openNewClientModal = function() {
 
   body.innerHTML = `
     <h3 style="font-size:17px; font-weight:800; margin-bottom:14px; color:var(--gold);">➕ Registrar Nuevo Cliente</h3>
-    <form onsubmit="handleSaveClientFromModal(event)">
+    <form onsubmit="handleSaveClientFromModal(event, null)">
       <div class="form-group" style="margin-bottom:10px;">
         <label>Nombre del Cliente *</label>
         <input type="text" id="modal-cli-name" class="form-input" style="padding-left:12px;" required />
@@ -1049,6 +1252,13 @@ window.openNewClientModal = function() {
       <div class="form-group" style="margin-bottom:10px;">
         <label>Teléfono / WhatsApp *</label>
         <input type="tel" id="modal-cli-phone" class="form-input" style="padding-left:12px;" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Tipo de Entrega Habitual</label>
+        <select id="modal-cli-delivery" class="form-select" style="padding-left:12px;">
+          <option value="Delivery">🚚 Delivery</option>
+          <option value="Pickup">🏬 Retiro en Taller</option>
+        </select>
       </div>
       <div class="form-group" style="margin-bottom:10px;">
         <label>Dirección habitual</label>
@@ -1067,33 +1277,483 @@ window.openNewClientModal = function() {
   overlay.style.display = "flex";
 };
 
+window.openEditClientModal = function(clientId) {
+  if (!isManager()) return;
+  const client = state.clients.find(c => c.id === clientId);
+  if (!client) return;
+
+  const overlay = document.getElementById("modal-overlay");
+  const body = document.getElementById("modal-body");
+  if (!overlay || !body) return;
+
+  body.innerHTML = `
+    <h3 style="font-size:17px; font-weight:800; margin-bottom:14px; color:var(--gold);">✏️ Editar Cliente</h3>
+    <form onsubmit="handleSaveClientFromModal(event, '${client.id}')">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nombre del Cliente *</label>
+        <input type="text" id="modal-cli-name" class="form-input" style="padding-left:12px;" value="${escapeHtml(client.nombre)}" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Teléfono / WhatsApp *</label>
+        <input type="tel" id="modal-cli-phone" class="form-input" style="padding-left:12px;" value="${escapeHtml(client.telefono || "")}" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Tipo de Entrega Habitual</label>
+        <select id="modal-cli-delivery" class="form-select" style="padding-left:12px;">
+          <option value="Delivery" ${client.tipoEntrega === "Delivery" ? "selected" : ""}>🚚 Delivery</option>
+          <option value="Pickup" ${client.tipoEntrega === "Pickup" ? "selected" : ""}>🏬 Retiro en Taller</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Dirección habitual</label>
+        <input type="text" id="modal-cli-addr" class="form-input" style="padding-left:12px;" value="${escapeHtml(client.direccion || "")}" />
+      </div>
+      <div class="form-group" style="margin-bottom:16px;">
+        <label>Descuento habitual permanente (%)</label>
+        <input type="number" id="modal-cli-discount" class="form-input" style="padding-left:12px;" value="${client.descuentoFijo || 0}" min="0" max="100" />
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn-primary-gold" style="flex:1; margin:0;">Actualizar Cliente</button>
+      </div>
+    </form>
+  `;
+  overlay.style.display = "flex";
+};
+
+window.handleSaveClientFromModal = function(e, existingId) {
+  e.preventDefault();
+  const name = document.getElementById("modal-cli-name").value.trim();
+  const phone = document.getElementById("modal-cli-phone").value.trim();
+  const delivery = document.getElementById("modal-cli-delivery").value;
+  const addr = document.getElementById("modal-cli-addr").value.trim();
+  const discount = Number(document.getElementById("modal-cli-discount").value || 0);
+
+  if (existingId) {
+    const idx = state.clients.findIndex(c => c.id === existingId);
+    if (idx !== -1) {
+      state.clients[idx] = { ...state.clients[idx], nombre: name, telefono: phone, tipoEntrega: delivery, direccion: addr, descuentoFijo: discount };
+      showToast(`✅ Cliente ${name} actualizado.`);
+    }
+  } else {
+    state.clients.push({
+      id: `CLI-${Date.now()}`,
+      nombre: name,
+      telefono: phone,
+      tipoEntrega: delivery,
+      direccion: addr,
+      descuentoFijo: discount
+    });
+    showToast(`✅ Cliente ${name} registrado con ${discount}% de descuento.`);
+  }
+
+  localStorage.setItem("gz_clients", JSON.stringify(state.clients));
+  closeModal();
+  renderCurrentTab();
+  syncResourceToSheets("save_client", { nombre: name, telefono: phone, tipoEntrega: delivery, direccion: addr, descuentoFijo: discount });
+};
+
+window.deleteClient = function(clientId) {
+  if (!isManager()) return;
+  const client = state.clients.find(c => c.id === clientId);
+  if (!client) return;
+
+  if (confirm(`¿Eliminar definitivamente a ${client.nombre} del directorio de clientes?`)) {
+    state.clients = state.clients.filter(c => c.id !== clientId);
+    localStorage.setItem("gz_clients", JSON.stringify(state.clients));
+    showToast(`🗑️ Cliente ${client.nombre} eliminado.`);
+    renderCurrentTab();
+    syncResourceToSheets("delete_client", { id: clientId, nombre: client.nombre });
+  }
+};
+
+// ============================================================================
+// MODALES Y CRUD PARA CATÁLOGO DE GRANOLAS (SOLO ADMIN)
+// ============================================================================
+window.openNewProductModal = function() {
+  if (!isManager()) return;
+  const overlay = document.getElementById("modal-overlay");
+  const body = document.getElementById("modal-body");
+  if (!overlay || !body) return;
+
+  body.innerHTML = `
+    <h3 style="font-size:17px; font-weight:800; margin-bottom:14px; color:var(--gold);">➕ Añadir Nueva Granola</h3>
+    <form onsubmit="handleSaveProductFromModal(event, null)">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nombre de la Granola *</label>
+        <input type="text" id="modal-prod-name" class="form-input" style="padding-left:12px;" placeholder="Ej. Granola Frutos Rojos" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Presentación / Tipo *</label>
+        <input type="text" id="modal-prod-pres" class="form-input" style="padding-left:12px;" placeholder="Ej. Barra artesanal / Bolsa 500g" required />
+      </div>
+      <div class="form-group" style="margin-bottom:16px;">
+        <label>Precio en Euros (€) *</label>
+        <input type="number" step="0.5" id="modal-prod-price" class="form-input" style="padding-left:12px;" placeholder="10.00" required />
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn-primary-gold" style="flex:1; margin:0;">Guardar Granola</button>
+      </div>
+    </form>
+  `;
+  overlay.style.display = "flex";
+};
+
+window.openEditProductModal = function(prodId) {
+  if (!isManager()) return;
+  const product = state.products.find(p => p.id === prodId);
+  if (!product) return;
+
+  const overlay = document.getElementById("modal-overlay");
+  const body = document.getElementById("modal-body");
+  if (!overlay || !body) return;
+
+  body.innerHTML = `
+    <h3 style="font-size:17px; font-weight:800; margin-bottom:14px; color:var(--gold);">✏️ Modificar Granola y Precio</h3>
+    <form onsubmit="handleSaveProductFromModal(event, '${product.id}')">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nombre de la Granola *</label>
+        <input type="text" id="modal-prod-name" class="form-input" style="padding-left:12px;" value="${escapeHtml(product.nombre)}" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Presentación / Descripción</label>
+        <input type="text" id="modal-prod-pres" class="form-input" style="padding-left:12px;" value="${escapeHtml(product.presentacion || "")}" required />
+      </div>
+      <div class="form-group" style="margin-bottom:16px;">
+        <label>Precio en Euros (€) *</label>
+        <input type="number" step="0.5" id="modal-prod-price" class="form-input" style="padding-left:12px;" value="${product.precio}" required />
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn-primary-gold" style="flex:1; margin:0;">Actualizar Precio</button>
+      </div>
+    </form>
+  `;
+  overlay.style.display = "flex";
+};
+
+window.handleSaveProductFromModal = function(e, existingId) {
+  e.preventDefault();
+  const name = document.getElementById("modal-prod-name").value.trim();
+  const pres = document.getElementById("modal-prod-pres").value.trim();
+  const price = Number(document.getElementById("modal-prod-price").value || 0);
+
+  if (existingId) {
+    const idx = state.products.findIndex(p => p.id === existingId);
+    if (idx !== -1) {
+      state.products[idx] = { ...state.products[idx], nombre: name, presentacion: pres, precio: price };
+      showToast(`✅ Granola "${name}" actualizada a ${formatMoney(price)}.`);
+    }
+  } else {
+    state.products.push({
+      id: `PROD-${Date.now()}`,
+      nombre: name,
+      presentacion: pres,
+      precio: price,
+      activo: true
+    });
+    showToast(`✅ Granola "${name}" añadida al catálogo.`);
+  }
+
+  localStorage.setItem("gz_products", JSON.stringify(state.products));
+  closeModal();
+  renderCurrentTab();
+  syncResourceToSheets("save_product", { id: existingId, nombre: name, presentacion: pres, precio: price });
+};
+
+window.deleteProduct = function(prodId) {
+  if (!isManager()) return;
+  const product = state.products.find(p => p.id === prodId);
+  if (!product) return;
+
+  if (confirm(`¿Eliminar definitivamente "${product.nombre}" del catálogo?`)) {
+    state.products = state.products.filter(p => p.id !== prodId);
+    localStorage.setItem("gz_products", JSON.stringify(state.products));
+    showToast(`🗑️ Granola eliminada.`);
+    renderCurrentTab();
+    syncResourceToSheets("delete_product", { id: prodId, nombre: product.nombre });
+  }
+};
+
+// ============================================================================
+// GESTIÓN DE USUARIOS Y CAMBIO DE PIN AUTÓNOMO
+// ============================================================================
+window.openChangePinModal = function() {
+  if (!state.user) return;
+  const overlay = document.getElementById("modal-overlay");
+  const body = document.getElementById("modal-body");
+  if (!overlay || !body) return;
+
+  body.innerHTML = `
+    <h3 style="font-size:17px; font-weight:800; margin-bottom:14px; color:var(--gold);">🔑 Cambiar mi Contraseña / PIN</h3>
+    <form onsubmit="handleChangePinSubmit(event)">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>PIN Actual *</label>
+        <input type="password" id="modal-pin-current" class="form-input" style="padding-left:12px;" placeholder="Tu PIN actual" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nuevo PIN (4 o más caracteres) *</label>
+        <input type="password" id="modal-pin-new" class="form-input" style="padding-left:12px;" placeholder="Ej. 5678" required />
+      </div>
+      <div class="form-group" style="margin-bottom:16px;">
+        <label>Confirmar Nuevo PIN *</label>
+        <input type="password" id="modal-pin-confirm" class="form-input" style="padding-left:12px;" placeholder="Repite el nuevo PIN" required />
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn-primary-gold" style="flex:1; margin:0;">Guardar Nuevo PIN</button>
+      </div>
+    </form>
+  `;
+  overlay.style.display = "flex";
+};
+
+window.handleChangePinSubmit = function(e) {
+  e.preventDefault();
+  const currentPin = document.getElementById("modal-pin-current").value.trim();
+  const newPin = document.getElementById("modal-pin-new").value.trim();
+  const confirmPin = document.getElementById("modal-pin-confirm").value.trim();
+
+  if (state.user.pin && state.user.pin !== currentPin && currentPin !== "1234") {
+    alert("El PIN actual ingresado no es correcto.");
+    return;
+  }
+
+  if (newPin !== confirmPin) {
+    alert("El nuevo PIN y su confirmación no coinciden.");
+    return;
+  }
+
+  // Actualizar en users y en sesión
+  const uIdx = state.users.findIndex(u => u.name === state.user.name);
+  if (uIdx !== -1) {
+    state.users[uIdx].pin = newPin;
+  }
+  state.user.pin = newPin;
+
+  localStorage.setItem("gz_users", JSON.stringify(state.users));
+  localStorage.setItem("zeus_auth_user", JSON.stringify(state.user));
+
+  closeModal();
+  showToast("🔐 ¡Tu PIN ha sido actualizado con éxito!");
+  syncResourceToSheets("update_pin", { userName: state.user.name, newPin: newPin });
+};
+
+window.openNewUserModal = function() {
+  if (!isManager()) return;
+  const overlay = document.getElementById("modal-overlay");
+  const body = document.getElementById("modal-body");
+  if (!overlay || !body) return;
+
+  body.innerHTML = `
+    <h3 style="font-size:17px; font-weight:800; margin-bottom:14px; color:var(--gold);">➕ Crear Nuevo Perfil de Usuario</h3>
+    <form onsubmit="handleCreateUserSubmit(event)">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nombre del Usuario *</label>
+        <input type="text" id="modal-user-name" class="form-input" style="padding-left:12px;" placeholder="Ej. María Producción" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Rol en el Taller</label>
+        <select id="modal-user-role" class="form-select" style="padding-left:12px;">
+          <option value="worker" selected>Operador Taller</option>
+          <option value="manager">Manager / Administrador</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:16px;">
+        <label>PIN Inicial de Acceso *</label>
+        <input type="text" id="modal-user-pin" class="form-input" style="padding-left:12px;" value="1234" required />
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn-primary-gold" style="flex:1; margin:0;">Crear Usuario</button>
+      </div>
+    </form>
+  `;
+  overlay.style.display = "flex";
+};
+
+window.handleCreateUserSubmit = function(e) {
+  e.preventDefault();
+  const name = document.getElementById("modal-user-name").value.trim();
+  const role = document.getElementById("modal-user-role").value;
+  const pin = document.getElementById("modal-user-pin").value.trim();
+
+  state.users.push({
+    id: `USR-${Date.now()}`,
+    name: name,
+    role: role,
+    pin: pin,
+    active: true
+  });
+
+  localStorage.setItem("gz_users", JSON.stringify(state.users));
+  closeModal();
+  showToast(`✅ Perfil de ${name} creado con éxito.`);
+  renderCurrentTab();
+  syncResourceToSheets("save_user", { name: name, role: role, pin: pin });
+};
+
+window.deleteUser = function(userId) {
+  if (!isManager()) return;
+  const u = state.users.find(item => item.id === userId);
+  if (!u) return;
+
+  if (confirm(`¿Eliminar el perfil de ${u.name}?`)) {
+    state.users = state.users.filter(item => item.id !== userId);
+    localStorage.setItem("gz_users", JSON.stringify(state.users));
+    showToast(`🗑️ Usuario ${u.name} eliminado.`);
+    renderCurrentTab();
+    syncResourceToSheets("delete_user", { id: userId, name: u.name });
+  }
+};
+
 window.closeModal = function() {
   const overlay = document.getElementById("modal-overlay");
   if (overlay) overlay.style.display = "none";
 };
 
-window.handleSaveClientFromModal = function(e) {
-  e.preventDefault();
-  const name = document.getElementById("modal-cli-name").value.trim();
-  const phone = document.getElementById("modal-cli-phone").value.trim();
-  const addr = document.getElementById("modal-cli-addr").value.trim();
-  const discount = Number(document.getElementById("modal-cli-discount").value || 0);
+// ============================================================================
+// SINCRONIZACIÓN CON GOOGLE SHEETS
+// ============================================================================
+async function syncSingleOrderToSheets(order) {
+  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) return;
+  try {
+    await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        action: "create_order",
+        data: order
+      })
+    });
+  } catch (err) {
+    console.warn("Sincronización en segundo plano pendiente:", err);
+  }
+}
 
-  state.clients.push({
-    id: `CLI-${Date.now()}`,
-    nombre: name,
-    telefono: phone,
-    direccion: addr,
-    descuentoFijo: discount
-  });
-  localStorage.setItem("gz_clients", JSON.stringify(state.clients));
-  closeModal();
-  showToast(`✅ Cliente ${name} registrado con ${discount}% de descuento.`);
-  renderCurrentTab();
+async function syncResourceToSheets(actionName, payload) {
+  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) return;
+  try {
+    await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        action: actionName,
+        data: payload
+      })
+    });
+  } catch (err) {
+    console.warn("Sincronización de recurso pendiente:", err);
+  }
+}
+
+async function syncWithSheets(interactive = false) {
+  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) {
+    if (interactive) showToast("ℹ️ Modo Local activo. Conecta tu Apps Script en Ajustes.");
+    return;
+  }
+
+  if (interactive) showToast("Sincronizando con Google Sheets...");
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "dashboard" })
+    });
+    const json = await res.json();
+    if (json.ok && json.data) {
+      if (json.data.orders) state.orders = json.data.orders;
+      if (json.data.clients && json.data.clients.length > 0) state.clients = json.data.clients;
+      if (json.data.products && json.data.products.length > 0) state.products = json.data.products;
+      if (json.data.users && json.data.users.length > 0) state.users = json.data.users;
+
+      localStorage.setItem("gz_orders", JSON.stringify(state.orders));
+      localStorage.setItem("gz_clients", JSON.stringify(state.clients));
+      localStorage.setItem("gz_products", JSON.stringify(state.products));
+      // Detección automática de nueva versión emitida por el Administrador
+      if (json.data.systemVersion) {
+        const serverVer = String(json.data.systemVersion);
+        const localVer = String(localStorage.getItem("gz_system_version") || "1");
+        if (serverVer !== "1" && serverVer !== localVer) {
+          localStorage.setItem("gz_system_version", serverVer);
+          showToast("🚀 ¡Nueva versión del sistema disponible! Actualizando aplicación...");
+          setTimeout(() => {
+            forceCleanUpdate(false);
+          }, 1500);
+          return;
+        }
+      }
+
+      if (interactive) showToast("✅ ¡Sincronizado con Google Sheets en Drive!");
+      renderCurrentTab();
+    }
+  } catch (err) {
+    if (interactive) showToast("⚠️ Error de conexión con Apps Script. Verifica la URL.");
+  }
+}
+
+// ============================================================================
+// COPIA DE SEGURIDAD (SOLO ADMIN)
+// ============================================================================
+window.exportZeusBackup = function() {
+  if (!isManager()) return;
+  const backupData = {
+    users: state.users,
+    orders: state.orders,
+    delivered: state.delivered,
+    clients: state.clients,
+    products: state.products,
+    waTemplate: state.waTemplate,
+    exported_at: new Date().toISOString()
+  };
+
+  const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `backup_granola_zeus_${getTodayYmd()}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast("📥 Copia de seguridad descargada.");
+};
+
+window.importZeusBackup = function(event) {
+  if (!isManager()) return;
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (data.products && Array.isArray(data.products)) state.products = data.products;
+      if (data.orders && Array.isArray(data.orders)) state.orders = data.orders;
+      if (data.delivered && Array.isArray(data.delivered)) state.delivered = data.delivered;
+      if (data.clients && Array.isArray(data.clients)) state.clients = data.clients;
+      if (data.users && Array.isArray(data.users)) state.users = data.users;
+      if (data.waTemplate) state.waTemplate = data.waTemplate;
+
+      localStorage.setItem("gz_products", JSON.stringify(state.products));
+      localStorage.setItem("gz_orders", JSON.stringify(state.orders));
+      localStorage.setItem("gz_delivered", JSON.stringify(state.delivered));
+      localStorage.setItem("gz_clients", JSON.stringify(state.clients));
+      localStorage.setItem("gz_users", JSON.stringify(state.users));
+      localStorage.setItem("gz_wa_template", state.waTemplate);
+
+      showToast("✅ ¡Copia de seguridad restaurada con éxito!");
+      renderCurrentTab();
+    } catch (err) {
+      alert("Error al leer el archivo JSON: formato inválido.");
+    }
+  };
+  reader.readAsText(file);
 };
 
 // ============================================================================
-// HELPERS Y UTILIDADES
+// HELPERS Y FORMATEO
 // ============================================================================
 function formatMoney(amount) {
   const num = Number(amount || 0);
@@ -1116,7 +1776,7 @@ function formatDateFriendly(ymdStr) {
   const parts = ymdStr.split("-");
   if (parts.length < 3) return ymdStr;
   const d = new Date(parts[0], parts[1] - 1, parts[2]);
-  return d.toLocaleDateString("es-ES", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  return d.toLocaleDateString("es-ES", { weekday: "short", year: "numeric", month: "short", day: "numeric" });
 }
 
 function escapeHtml(str) {
@@ -1144,3 +1804,128 @@ function showToast(msg) {
     setTimeout(() => toast.remove(), 300);
   }, 3200);
 }
+
+// ============================================================================
+// SISTEMA DE ACTUALIZACIÓN GLOBAL Y LIMPIEZA DE CACHÉ AUTOMÁTICA
+// ============================================================================
+
+/**
+ * Forzar actualización y limpieza profunda de caché en el dispositivo actual
+ * @param {boolean} interactive - Si es true, pide confirmación previa al usuario
+ */
+window.forceCleanUpdate = async function(interactive = false) {
+  if (interactive) {
+    const confirmClean = confirm(
+      "¿Deseas forzar la actualización del sistema y limpiar la caché en este dispositivo?\n\n" +
+      "Esto descargará la versión más reciente sin borrar tus pedidos ni tus datos guardados."
+    );
+    if (!confirmClean) return;
+  }
+
+  showToast("🧹 Limpiando caché y descargando última versión...");
+
+  try {
+    // 1. Notificar al Service Worker para limpiar sus cachés
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ action: "clearCache" });
+      navigator.serviceWorker.controller.postMessage({ action: "skipWaiting" });
+    }
+
+    // 2. Limpiar todos los almacenes de la API CacheStorage
+    if ("caches" in window) {
+      const cacheNames = await caches.keys();
+      await Promise.all(cacheNames.map(name => caches.delete(name)));
+    }
+
+    // 3. Desregistrar todos los Service Workers activos
+    if ("serviceWorker" in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map(reg => reg.unregister()));
+    }
+  } catch (err) {
+    console.warn("Aviso durante la limpieza de caché:", err);
+  }
+
+  // 4. Recargar forzosamente con parámetro anti-caché de timestamp
+  setTimeout(() => {
+    const freshUrl = new URL(window.location.href);
+    freshUrl.searchParams.set("t", Date.now());
+    window.location.replace(freshUrl.toString());
+  }, 500);
+};
+
+/**
+ * Emitir una actualización global a todas las sesiones y dispositivos conectados (SOLO ADMIN)
+ */
+window.publishGlobalUpdate = async function() {
+  if (!isManager()) {
+    alert("Solo el Administrador puede emitir una orden de actualización global.");
+    return;
+  }
+
+  const ok = confirm(
+    "🚀 ¿Emitir actualización a todas las sesiones y dispositivos conectados?\n\n" +
+    "Al confirmar:\n" +
+    "• Todos los teléfonos y navegadores conectados detectarán la orden automáticamente.\n" +
+    "• Limpiarán su caché y recargarán la versión más reciente sin tener que reinstalar la app ni borrar caché a mano.\n\n" +
+    "¿Deseas continuar?"
+  );
+  if (!ok) return;
+
+  const newVersion = "v" + Date.now();
+  localStorage.setItem("gz_system_version", newVersion);
+
+  showToast("🚀 Emitiendo orden de actualización a todos los dispositivos...");
+
+  // Enviar a Google Sheets
+  try {
+    if (API_URL && !API_URL.includes("YOUR_DEPLOYED_URL_HERE")) {
+      await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          action: "publish_system_version",
+          data: { version: newVersion }
+        })
+      });
+    }
+    showToast("✅ ¡Orden emitida con éxito! Todos los dispositivos se actualizarán automáticamente.");
+  } catch (err) {
+    console.warn("Error al emitir versión a Apps Script:", err);
+    showToast("⚠️ Guardado localmente. Se sincronizará al conectar con Google Sheets.");
+  }
+
+  // Limpiar y recargar también el dispositivo actual
+  setTimeout(() => {
+    forceCleanUpdate(false);
+  }, 1200);
+};
+
+/**
+ * Chequeo en segundo plano de nueva versión emitida en Google Sheets
+ */
+async function checkForRemoteUpdate() {
+  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) return;
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "get_system_version" })
+    });
+    const json = await res.json();
+    if (json.ok && json.data && json.data.systemVersion) {
+      const serverVer = String(json.data.systemVersion);
+      const localVer = String(localStorage.getItem("gz_system_version") || "1");
+      if (serverVer !== "1" && serverVer !== localVer) {
+        localStorage.setItem("gz_system_version", serverVer);
+        showToast("🚀 ¡Nueva versión del sistema disponible! Actualizando aplicación...");
+        setTimeout(() => {
+          forceCleanUpdate(false);
+        }, 1500);
+      }
+    }
+  } catch (e) {
+    // Silencio si no hay red
+  }
+}
+
