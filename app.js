@@ -61,13 +61,24 @@ const state = {
   orderFilter: "all",
   searchQuery: "",
   newOrderCart: {}, // { prodId: quantity }
-  newOrderDiscount: 0 // porcentaje seleccionado
+  newOrderDiscount: 0, // porcentaje seleccionado
+  orderDraft: {
+    selectedClientId: "",
+    clientName: "",
+    clientPhone: "",
+    deliveryType: "Delivery",
+    address: "",
+    deliveryDate: "",
+    deliveryTime: "15:00",
+    notes: ""
+  }
 };
 
 // ============================================================================
 // INICIALIZACIÓN Y EVENTOS PRINCIPALES
 // ============================================================================
 document.addEventListener("DOMContentLoaded", () => {
+  deduplicateClients();
   applyTheme(state.theme);
   checkAuth();
   bindGlobalEvents();
@@ -100,6 +111,43 @@ function registerServiceWorker() {
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js").catch(console.error);
   }
+}
+
+// ============================================================================
+// NORMALIZACIÓN Y DEDUPLICACIÓN DE CLIENTES (TELÉFONOS ÚNICOS)
+// ============================================================================
+function normalizePhone(p) {
+  return String(p || "").replace(/\D/g, "");
+}
+
+function deduplicateClients() {
+  if (!state.clients || !Array.isArray(state.clients)) return;
+  const seenPhones = new Map();
+  const cleanList = [];
+
+  for (const c of state.clients) {
+    const normP = normalizePhone(c.telefono);
+
+    if (normP && normP.length >= 7) {
+      if (seenPhones.has(normP)) {
+        // Ya existía un cliente con este teléfono: unificar datos sin duplicar
+        const existing = seenPhones.get(normP);
+        if (!existing.direccion && c.direccion) existing.direccion = c.direccion;
+        if ((!existing.descuentoFijo || existing.descuentoFijo === 0) && c.descuentoFijo) {
+          existing.descuentoFijo = c.descuentoFijo;
+        }
+        if (c.nombre && c.nombre.length > existing.nombre.length) {
+          existing.nombre = c.nombre;
+        }
+        continue;
+      }
+      seenPhones.set(normP, c);
+    }
+    cleanList.push(c);
+  }
+
+  state.clients = cleanList;
+  localStorage.setItem("gz_clients", JSON.stringify(state.clients));
 }
 
 // ============================================================================
@@ -484,12 +532,65 @@ function renderOrderCardHtml(o) {
 // ============================================================================
 // 3. PESTAÑA NUEVO PEDIDO (➕ CONSTRUCTOR CON DESCUENTOS Y CONTADORES)
 // ============================================================================
+function saveCurrentOrderDraftFromDom() {
+  const nameEl = document.getElementById("order-client-name");
+  const phoneEl = document.getElementById("order-client-phone");
+  const typeEl = document.getElementById("order-delivery-type");
+  const addrEl = document.getElementById("order-address");
+  const dateEl = document.getElementById("order-delivery-date");
+  const timeEl = document.getElementById("order-delivery-time");
+  const notesEl = document.getElementById("order-notes");
+  const selectEl = document.getElementById("select-client");
+
+  if (!state.orderDraft) {
+    state.orderDraft = {
+      selectedClientId: "",
+      clientName: "",
+      clientPhone: "",
+      deliveryType: "Delivery",
+      address: "",
+      deliveryDate: getTodayYmd(),
+      deliveryTime: "15:00",
+      notes: ""
+    };
+  }
+
+  if (nameEl) state.orderDraft.clientName = nameEl.value;
+  if (phoneEl) state.orderDraft.clientPhone = phoneEl.value;
+  if (typeEl) state.orderDraft.deliveryType = typeEl.value;
+  if (addrEl) state.orderDraft.address = addrEl.value;
+  if (dateEl) state.orderDraft.deliveryDate = dateEl.value;
+  if (timeEl) state.orderDraft.deliveryTime = timeEl.value;
+  if (notesEl) state.orderDraft.notes = notesEl.value;
+  if (selectEl) state.orderDraft.selectedClientId = selectEl.value;
+}
+
 function renderNewOrderView(container) {
   if (!state.newOrderCart) state.newOrderCart = {};
+  if (!state.orderDraft) {
+    state.orderDraft = {
+      selectedClientId: "",
+      clientName: "",
+      clientPhone: "",
+      deliveryType: "Delivery",
+      address: "",
+      deliveryDate: getTodayYmd(),
+      deliveryTime: "15:00",
+      notes: ""
+    };
+  } else {
+    // Si ya habían campos en el DOM, capturar lo que el usuario haya escrito
+    saveCurrentOrderDraftFromDom();
+  }
+
+  if (!state.orderDraft.deliveryDate) {
+    state.orderDraft.deliveryDate = getTodayYmd();
+  }
 
   const subtotal = calculateCartSubtotal();
   const discountAmount = (subtotal * (state.newOrderDiscount / 100));
   const finalTotal = Math.max(0, subtotal - discountAmount);
+  const isDelivery = state.orderDraft.deliveryType === "Delivery";
 
   container.innerHTML = `
     <div class="view-header">
@@ -510,7 +611,9 @@ function renderNewOrderView(container) {
             <select id="select-client" class="form-select" onchange="handleClientSelect(this.value)" style="padding-left:12px;">
               <option value="">-- Selecciona o escribe abajo --</option>
               ${state.clients.map(c => `
-                <option value="${c.id}">${escapeHtml(c.nombre)} ${c.descuentoFijo ? `(⭐ Descuento fijo ${c.descuentoFijo}%)` : ""}</option>
+                <option value="${c.id}" ${state.orderDraft.selectedClientId === c.id ? "selected" : ""}>
+                  ${escapeHtml(c.nombre)} (📞 ${escapeHtml(c.telefono || "Sin tlf")}${c.descuentoFijo ? ` · ⭐ ${c.descuentoFijo}%` : ""})
+                </option>
               `).join("")}
             </select>
           </div>
@@ -519,11 +622,30 @@ function renderNewOrderView(container) {
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
           <div class="form-group">
             <label>Nombre del Cliente *</label>
-            <input type="text" id="order-client-name" class="form-input" style="padding-left:12px;" placeholder="Ej. Carlos Mendoza" required />
+            <input 
+              type="text" 
+              id="order-client-name" 
+              class="form-input" 
+              style="padding-left:12px;" 
+              placeholder="Ej. Carlos Mendoza" 
+              value="${escapeHtml(state.orderDraft.clientName || "")}"
+              oninput="state.orderDraft.clientName = this.value"
+              required 
+            />
           </div>
           <div class="form-group">
             <label>WhatsApp / Teléfono *</label>
-            <input type="tel" id="order-client-phone" class="form-input" style="padding-left:12px;" placeholder="Ej. 04124593653" required />
+            <input 
+              type="tel" 
+              id="order-client-phone" 
+              class="form-input" 
+              style="padding-left:12px;" 
+              placeholder="Ej. 04124593653" 
+              value="${escapeHtml(state.orderDraft.clientPhone || "")}"
+              oninput="handlePhoneInput(this.value)"
+              required 
+            />
+            <div id="phone-client-feedback" style="font-size:12px; margin-top:4px; display:none;"></div>
           </div>
         </div>
 
@@ -531,13 +653,22 @@ function renderNewOrderView(container) {
           <div class="form-group">
             <label>Tipo de Entrega *</label>
             <select id="order-delivery-type" class="form-select" style="padding-left:12px;" onchange="handleDeliveryTypeChange(this.value)">
-              <option value="Delivery" selected>🚚 Envío a Domicilio (Delivery)</option>
-              <option value="Pickup">🏬 Retiro en Taller / Tienda</option>
+              <option value="Delivery" ${isDelivery ? "selected" : ""}>🚚 Envío a Domicilio (Delivery)</option>
+              <option value="Pickup" ${!isDelivery ? "selected" : ""}>🏬 Retiro en Taller / Tienda</option>
             </select>
           </div>
-          <div class="form-group" id="group-delivery-address">
+          <div class="form-group" id="group-delivery-address" style="display:${isDelivery ? "flex" : "none"};">
             <label>Dirección Exacta de Envío *</label>
-            <input type="text" id="order-address" class="form-input" style="padding-left:12px;" placeholder="Calle, sector, punto de referencia" />
+            <input 
+              type="text" 
+              id="order-address" 
+              class="form-input" 
+              style="padding-left:12px;" 
+              placeholder="Calle, sector, punto de referencia"
+              value="${escapeHtml(state.orderDraft.address || "")}"
+              oninput="state.orderDraft.address = this.value"
+              ${isDelivery ? "required" : ""}
+            />
           </div>
         </div>
       </div>
@@ -549,12 +680,12 @@ function renderNewOrderView(container) {
           Toca <strong>[+]</strong> o <strong>[-]</strong> para añadir unidades directamente.
         </p>
 
-        <div class="product-items-list">
+        <div class="product-items-list" id="products-builder-list">
           ${state.products.filter(p => p.activo !== false).map(p => {
             const qty = state.newOrderCart[p.id] || 0;
             const isSelected = qty > 0;
             return `
-              <div class="product-item-row ${isSelected ? "selected" : ""}">
+              <div class="product-item-row ${isSelected ? "selected" : ""}" id="prod-row-${p.id}">
                 <div class="product-info-area">
                   <div class="product-name-title">${escapeHtml(p.nombre)}</div>
                   <div class="product-price-tag">${formatMoney(p.precio)} <span style="font-size:11px; color:var(--text-muted); font-weight:normal;">/ unidad</span></div>
@@ -562,7 +693,7 @@ function renderNewOrderView(container) {
 
                 <div class="stepper-controls">
                   <button type="button" class="stepper-btn" onclick="updateCartItem('${p.id}', -1)">-</button>
-                  <span class="stepper-qty">${qty}</span>
+                  <span class="stepper-qty" id="stepper-qty-${p.id}">${qty}</span>
                   <button type="button" class="stepper-btn" onclick="updateCartItem('${p.id}', 1)">+</button>
                 </div>
               </div>
@@ -576,12 +707,12 @@ function renderNewOrderView(container) {
             <span>🏷️ Descuento al Pedido</span>
             <span id="discount-display-label">${state.newOrderDiscount}% aplicado</span>
           </label>
-          <div class="discount-pills-bar">
-            <button type="button" class="discount-pill ${state.newOrderDiscount === 0 ? "active" : ""}" onclick="setOrderDiscount(0)">0%</button>
-            <button type="button" class="discount-pill ${state.newOrderDiscount === 5 ? "active" : ""}" onclick="setOrderDiscount(5)">5%</button>
-            <button type="button" class="discount-pill ${state.newOrderDiscount === 10 ? "active" : ""}" onclick="setOrderDiscount(10)">10%</button>
-            <button type="button" class="discount-pill ${state.newOrderDiscount === 15 ? "active" : ""}" onclick="setOrderDiscount(15)">15% ⭐</button>
-            <button type="button" class="discount-pill ${state.newOrderDiscount === 20 ? "active" : ""}" onclick="setOrderDiscount(20)">20%</button>
+          <div class="discount-pills-bar" id="discount-pills-container">
+            <button type="button" class="discount-pill ${state.newOrderDiscount === 0 ? "active" : ""}" data-pct="0" onclick="setOrderDiscount(0)">0%</button>
+            <button type="button" class="discount-pill ${state.newOrderDiscount === 5 ? "active" : ""}" data-pct="5" onclick="setOrderDiscount(5)">5%</button>
+            <button type="button" class="discount-pill ${state.newOrderDiscount === 10 ? "active" : ""}" data-pct="10" onclick="setOrderDiscount(10)">10%</button>
+            <button type="button" class="discount-pill ${state.newOrderDiscount === 15 ? "active" : ""}" data-pct="15" onclick="setOrderDiscount(15)">15% ⭐</button>
+            <button type="button" class="discount-pill ${state.newOrderDiscount === 20 ? "active" : ""}" data-pct="20" onclick="setOrderDiscount(20)">20%</button>
           </div>
         </div>
 
@@ -608,17 +739,40 @@ function renderNewOrderView(container) {
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
           <div class="form-group">
             <label>Fecha de Entrega Requerida *</label>
-            <input type="date" id="order-delivery-date" class="form-input" style="padding-left:12px;" value="${getTodayYmd()}" required />
+            <input 
+              type="date" 
+              id="order-delivery-date" 
+              class="form-input" 
+              style="padding-left:12px;" 
+              value="${state.orderDraft.deliveryDate}" 
+              oninput="state.orderDraft.deliveryDate = this.value"
+              required 
+            />
           </div>
           <div class="form-group">
             <label>Hora Estimada</label>
-            <input type="time" id="order-delivery-time" class="form-input" style="padding-left:12px;" value="15:00" />
+            <input 
+              type="time" 
+              id="order-delivery-time" 
+              class="form-input" 
+              style="padding-left:12px;" 
+              value="${state.orderDraft.deliveryTime || "15:00"}" 
+              oninput="state.orderDraft.deliveryTime = this.value"
+            />
           </div>
         </div>
 
         <div class="form-group">
           <label>Notas Especiales / Observaciones</label>
-          <input type="text" id="order-notes" class="form-input" style="padding-left:12px;" placeholder="Ej. Entregar en portería, empaque para obsequio" />
+          <input 
+            type="text" 
+            id="order-notes" 
+            class="form-input" 
+            style="padding-left:12px;" 
+            placeholder="Ej. Entregar en portería, empaque para obsequio" 
+            value="${escapeHtml(state.orderDraft.notes || "")}"
+            oninput="state.orderDraft.notes = this.value"
+          />
         </div>
 
         <button type="submit" id="btn-save-order" class="btn-primary-gold" style="margin-top:16px;">
@@ -627,9 +781,15 @@ function renderNewOrderView(container) {
       </div>
     </form>
   `;
+
+  // Si había un teléfono pre-cargado, mostrar el feedback si coincide con cliente
+  if (state.orderDraft.clientPhone) {
+    handlePhoneInput(state.orderDraft.clientPhone, false);
+  }
 }
 
 window.handleDeliveryTypeChange = function(val) {
+  if (state.orderDraft) state.orderDraft.deliveryType = val;
   const addrGroup = document.getElementById("group-delivery-address");
   const addrInput = document.getElementById("order-address");
   if (!addrGroup || !addrInput) return;
@@ -642,6 +802,7 @@ window.handleDeliveryTypeChange = function(val) {
     addrGroup.style.display = "none";
     addrInput.value = "";
     addrInput.required = false;
+    if (state.orderDraft) state.orderDraft.address = "";
   }
 };
 
@@ -654,13 +815,56 @@ window.updateCartItem = function(prodId, delta) {
   } else {
     state.newOrderCart[prodId] = updated;
   }
-  renderNewOrderView(document.getElementById("main-content"));
+
+  // Actualización limpia en el DOM sin recargar la vista ni borrar los inputs
+  const qtyEl = document.getElementById("stepper-qty-" + prodId);
+  if (qtyEl) qtyEl.textContent = updated;
+
+  const rowEl = document.getElementById("prod-row-" + prodId);
+  if (rowEl) {
+    if (updated > 0) rowEl.classList.add("selected");
+    else rowEl.classList.remove("selected");
+  }
+
+  updateOrderFinancialSummaryDom();
 };
 
 window.setOrderDiscount = function(pct) {
   state.newOrderDiscount = Number(pct);
-  renderNewOrderView(document.getElementById("main-content"));
+
+  // Actualizar indicador de texto
+  const labelEl = document.getElementById("discount-display-label");
+  if (labelEl) labelEl.textContent = `${state.newOrderDiscount}% aplicado`;
+
+  // Actualizar botones de píldora
+  document.querySelectorAll("#discount-pills-container .discount-pill").forEach(btn => {
+    const btnPct = Number(btn.getAttribute("data-pct"));
+    btn.classList.toggle("active", btnPct === state.newOrderDiscount);
+  });
+
+  updateOrderFinancialSummaryDom();
 };
+
+function updateOrderFinancialSummaryDom() {
+  const subtotal = calculateCartSubtotal();
+  const discountAmount = (subtotal * (state.newOrderDiscount / 100));
+  const finalTotal = Math.max(0, subtotal - discountAmount);
+
+  const subtotalEl = document.getElementById("summary-subtotal");
+  if (subtotalEl) subtotalEl.textContent = formatMoney(subtotal);
+
+  const discountEl = document.getElementById("summary-discount");
+  if (discountEl) discountEl.textContent = "- " + formatMoney(discountAmount);
+
+  const totalEl = document.getElementById("summary-total");
+  if (totalEl) totalEl.textContent = formatMoney(finalTotal);
+
+  const btnSave = document.getElementById("btn-save-order");
+  if (btnSave) {
+    const span = btnSave.querySelector("span");
+    if (span) span.textContent = `💾 Registrar Pedido (${formatMoney(finalTotal)})`;
+  }
+}
 
 function calculateCartSubtotal() {
   let subtotal = 0;
@@ -674,26 +878,102 @@ function calculateCartSubtotal() {
 }
 
 window.handleClientSelect = function(clientId) {
-  if (!clientId) return;
+  if (!state.orderDraft) state.orderDraft = {};
+  state.orderDraft.selectedClientId = clientId;
+
+  if (!clientId) {
+    const feedbackEl = document.getElementById("phone-client-feedback");
+    if (feedbackEl) feedbackEl.style.display = "none";
+    return;
+  }
+
   const client = state.clients.find(c => c.id === clientId);
   if (client) {
+    state.orderDraft.clientName = client.nombre || "";
+    state.orderDraft.clientPhone = client.telefono || "";
+    state.orderDraft.deliveryType = client.tipoEntrega || "Delivery";
+    state.orderDraft.address = client.direccion || "";
+
     const nameInput = document.getElementById("order-client-name");
     const phoneInput = document.getElementById("order-client-phone");
     const addrInput = document.getElementById("order-address");
     const deliverySelect = document.getElementById("order-delivery-type");
 
-    if (nameInput) nameInput.value = client.nombre;
-    if (phoneInput) phoneInput.value = client.telefono || "";
-    if (addrInput) addrInput.value = client.direccion || "";
-    if (deliverySelect && client.tipoEntrega) {
-      deliverySelect.value = client.tipoEntrega;
-      handleDeliveryTypeChange(client.tipoEntrega);
+    if (nameInput) nameInput.value = state.orderDraft.clientName;
+    if (phoneInput) phoneInput.value = state.orderDraft.clientPhone;
+    if (deliverySelect) {
+      deliverySelect.value = state.orderDraft.deliveryType;
+      handleDeliveryTypeChange(state.orderDraft.deliveryType);
     }
+    if (addrInput) addrInput.value = state.orderDraft.address;
 
-    if (client.descuentoFijo) {
-      setOrderDiscount(client.descuentoFijo);
+    // Aplicar descuento sin borrar los campos
+    if (client.descuentoFijo !== undefined && client.descuentoFijo !== null) {
+      setOrderDiscount(Number(client.descuentoFijo));
       showToast(`⭐ Descuento habitual del ${client.descuentoFijo}% aplicado a ${client.nombre}`);
     }
+
+    const feedbackEl = document.getElementById("phone-client-feedback");
+    if (feedbackEl) {
+      feedbackEl.style.display = "block";
+      feedbackEl.innerHTML = `<span style="color:var(--gold); font-weight:700;">⭐ Cliente seleccionado:</span> <strong style="color:var(--text-main);">${escapeHtml(client.nombre)}</strong>`;
+    }
+  }
+};
+
+window.handlePhoneInput = function(phoneVal, autoFill = true) {
+  if (state.orderDraft) state.orderDraft.clientPhone = phoneVal;
+  const norm = normalizePhone(phoneVal);
+  const feedbackEl = document.getElementById("phone-client-feedback");
+
+  if (!norm || norm.length < 7) {
+    if (feedbackEl) feedbackEl.style.display = "none";
+    return;
+  }
+
+  // Buscar si ya existe un cliente con este número de WhatsApp
+  const matched = state.clients.find(c => normalizePhone(c.telefono) === norm);
+  if (matched) {
+    if (feedbackEl) {
+      feedbackEl.style.display = "block";
+      feedbackEl.innerHTML = `<span style="color:var(--gold); font-weight:700;">⚡ Teléfono registrado a:</span> <strong style="color:var(--text-main);">${escapeHtml(matched.nombre)}</strong>${matched.descuentoFijo ? ` (${matched.descuentoFijo}% desc.)` : ""}`;
+    }
+
+    if (autoFill) {
+      const nameInput = document.getElementById("order-client-name");
+      const addrInput = document.getElementById("order-address");
+      const deliverySelect = document.getElementById("order-delivery-type");
+      const clientSelect = document.getElementById("select-client");
+
+      // Auto-llenar nombre si está vacío
+      if (nameInput && !nameInput.value.trim()) {
+        nameInput.value = matched.nombre;
+        state.orderDraft.clientName = matched.nombre;
+      }
+      // Auto-llenar dirección si está vacía
+      if (addrInput && !addrInput.value.trim() && matched.direccion) {
+        addrInput.value = matched.direccion;
+        state.orderDraft.address = matched.direccion;
+      }
+      // Sincronizar tipo de entrega
+      if (deliverySelect && matched.tipoEntrega) {
+        deliverySelect.value = matched.tipoEntrega;
+        state.orderDraft.deliveryType = matched.tipoEntrega;
+        handleDeliveryTypeChange(matched.tipoEntrega);
+      }
+      // Sincronizar select si coincide
+      if (clientSelect) {
+        clientSelect.value = matched.id;
+        state.orderDraft.selectedClientId = matched.id;
+      }
+      // Aplicar descuento habitual si el actual está en 0
+      if (matched.descuentoFijo && state.newOrderDiscount === 0) {
+        setOrderDiscount(matched.descuentoFijo);
+        showToast(`⭐ Descuento del ${matched.descuentoFijo}% cargado para ${matched.nombre}`);
+      }
+    }
+  } else {
+    if (feedbackEl) feedbackEl.style.display = "none";
   }
 };
 
@@ -713,6 +993,24 @@ window.handleCreateOrderSubmit = async function(e) {
   const deliveryDate = document.getElementById("order-delivery-date").value;
   const deliveryTime = document.getElementById("order-delivery-time").value;
   const notes = document.getElementById("order-notes").value.trim();
+
+  if (!clientName) {
+    alert("Por favor ingresa el nombre del cliente.");
+    document.getElementById("order-client-name").focus();
+    return;
+  }
+
+  if (!clientPhone) {
+    alert("Por favor ingresa el WhatsApp o teléfono del cliente.");
+    document.getElementById("order-client-phone").focus();
+    return;
+  }
+
+  if (deliveryType === "Delivery" && !address) {
+    alert("Por favor ingresa la dirección de entrega para el envío a domicilio.");
+    document.getElementById("order-address").focus();
+    return;
+  }
 
   // Construir texto de detalle de productos
   const itemsTextList = [];
@@ -755,26 +1053,63 @@ window.handleCreateOrderSubmit = async function(e) {
     notificadoWA: "No"
   };
 
-  // Guardar en estado local
+  // Guardar en estado local de pedidos
   state.orders.unshift(orderPayload);
   localStorage.setItem("gz_orders", JSON.stringify(state.orders));
 
-  // Guardar cliente si es nuevo
-  if (!state.clients.some(c => c.nombre.toLowerCase() === clientName.toLowerCase())) {
-    state.clients.push({
+  // GESTIÓN INTELIGENTE DE CLIENTES: Evitar duplicados por teléfono o nombre
+  const normPhone = normalizePhone(clientPhone);
+  const normName = clientName.toLowerCase();
+
+  let matchedIdx = -1;
+  if (normPhone && normPhone.length >= 7) {
+    matchedIdx = state.clients.findIndex(c => normalizePhone(c.telefono) === normPhone);
+  }
+  if (matchedIdx === -1 && normName) {
+    matchedIdx = state.clients.findIndex(c => c.nombre && c.nombre.trim().toLowerCase() === normName);
+  }
+
+  if (matchedIdx !== -1) {
+    // Ya existe: actualizar sus datos sin duplicar jamás el número telefónico
+    const ex = state.clients[matchedIdx];
+    state.clients[matchedIdx] = {
+      ...ex,
+      nombre: clientName,
+      telefono: clientPhone,
+      tipoEntrega: deliveryType,
+      direccion: address || ex.direccion || "",
+      descuentoFijo: state.newOrderDiscount > 0 ? state.newOrderDiscount : (ex.descuentoFijo || 0)
+    };
+    localStorage.setItem("gz_clients", JSON.stringify(state.clients));
+    syncResourceToSheets("save_client", state.clients[matchedIdx]);
+  } else {
+    // Cliente totalmente nuevo
+    const newClient = {
       id: `CLI-${Date.now()}`,
       nombre: clientName,
       telefono: clientPhone,
       tipoEntrega: deliveryType,
       direccion: address,
-      descuentoFijo: state.newOrderDiscount
-    });
+      descuentoFijo: state.newOrderDiscount || 0
+    };
+    state.clients.push(newClient);
     localStorage.setItem("gz_clients", JSON.stringify(state.clients));
+    syncResourceToSheets("save_client", newClient);
   }
 
-  // Limpiar carrito
+  // Limpiar carrito y borrador
   state.newOrderCart = {};
   state.newOrderDiscount = 0;
+  state.orderDraft = {
+    selectedClientId: "",
+    clientName: "",
+    clientPhone: "",
+    deliveryType: "Delivery",
+    address: "",
+    deliveryDate: getTodayYmd(),
+    deliveryTime: "15:00",
+    notes: ""
+  };
 
   showToast(`✅ Pedido N° ${newId} registrado con éxito (${formatMoney(finalTotal)})`);
 
@@ -1328,6 +1663,15 @@ window.handleSaveClientFromModal = function(e, existingId) {
   const delivery = document.getElementById("modal-cli-delivery").value;
   const addr = document.getElementById("modal-cli-addr").value.trim();
   const discount = Number(document.getElementById("modal-cli-discount").value || 0);
+
+  const normPhone = normalizePhone(phone);
+  if (normPhone && normPhone.length >= 7) {
+    const dup = state.clients.find(c => c.id !== existingId && normalizePhone(c.telefono) === normPhone);
+    if (dup) {
+      alert(`⚠️ El número telefónico ${phone} ya pertenece al cliente "${dup.nombre}".\n\nNo se pueden registrar dos clientes con el mismo número de WhatsApp.`);
+      return;
+    }
+  }
 
   if (existingId) {
     const idx = state.clients.findIndex(c => c.id === existingId);
@@ -1928,4 +2272,3 @@ async function checkForRemoteUpdate() {
     // Silencio si no hay red
   }
 }
-
