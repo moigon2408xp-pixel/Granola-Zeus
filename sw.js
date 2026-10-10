@@ -1,9 +1,9 @@
-const CACHE_NAME = 'zeus-granola-v4';
+const CACHE_NAME = 'zeus-granola-v5';
 const ASSETS = [
   './',
   './index.html',
-  './styles.css?v=4',
-  './app.js?v=4',
+  './styles.css?v=5',
+  './app.js?v=5',
   './logo_zeus.jpg',
   './manifest.webmanifest'
 ];
@@ -43,7 +43,7 @@ self.addEventListener('message', (event) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
 
-  // Red primero para la navegación HTML principal (permite detectar cambios de inmediato)
+  // Red primero para la navegación HTML principal
   if (e.request.mode === 'navigate') {
     e.respondWith(
       fetch(e.request).then((res) => {
