@@ -1,11 +1,11 @@
 {
-  "name": "Zeus Granola Fit – Producción & Despacho",
+  "name": "Zeus Granola Fit — Producción & Despacho",
   "short_name": "ZeusGranola",
   "description": "Sistema de gestión de pedidos, producción artesanal y despacho Zeus Granola Fit",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#07140e",
-  "theme_color": "#0d281a",
+  "background_color": "#07130e",
+  "theme_color": "#07130e",
   "icons": [
     {
       "src": "logo_zeus.jpg",
