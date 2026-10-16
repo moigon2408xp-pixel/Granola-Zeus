@@ -3,25 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Zeus Granola Fit — Control de Producción & Pedidos</title>
+  <title>Zeus Granola Fit – Control de Producción & Pedidos</title>
   
-  <meta name="theme-color" content="#07140e">
+  <meta name="theme-color" content="#0d281a">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Zeus Granola">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/jpeg" href="logo_zeus.jpg">
-  <link rel="apple-touch-icon" href="logo_zeus.jpg">
   
-  <!-- Tipografía moderna Inter & Plus Jakarta Sans -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
-  
-  <!-- FontAwesome 6 y SweetAlert2 (estilo Creaciones JJ) -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
   
   <link rel="stylesheet" href="styles.css?v=5">
 </head>
@@ -31,77 +25,60 @@
        PANTALLA DE INICIO DE SESIÓN (LOGIN)
        ========================================== -->
   <div id="login-view" class="login-container">
-    <div class="login-bg-decor" aria-hidden="true">
-      <div class="login-bg-glow login-bg-glow--1"></div>
-      <div class="login-bg-glow login-bg-glow--2"></div>
-    </div>
-
     <div class="login-card">
       <div class="login-emblem-wrap">
-        <img src="logo_zeus.jpg" alt="Zeus Granola Fit" class="login-logo-img" onerror="this.style.display='none'">
-        <div class="login-emblem-badge"><i class="fa-solid fa-bolt"></i></div>
+        <img src="logo_zeus.jpg" alt="Zeus Granola Fit" class="login-logo-img">
       </div>
-      
-      <div class="login-brand-header">
-        <span class="login-tag">SISTEMA ARTESANAL DE PRODUCCIÓN</span>
-        <h1 class="login-title">ZEUS GRANOLA FIT</h1>
-        <p class="login-subtitle">Control de Pedidos, Taller & Despacho</p>
-      </div>
+      <h1 class="login-title">ZEUS GRANOLA FIT</h1>
+      <p class="login-subtitle">Sistema de Producción & Despacho</p>
 
       <form id="form-login" class="login-form" onsubmit="handleLoginSubmit(event)">
         <div class="form-group">
-          <label for="login-user"><i class="fa-solid fa-user-circle"></i> Usuario o Responsable</label>
+          <label for="login-user">Usuario / Responsable</label>
           <div class="input-icon-wrap">
-            <span class="input-icon"><i class="fa-solid fa-user-tie"></i></span>
+            <span class="input-icon">👤</span>
             <input 
               type="text" 
               id="login-user" 
               list="registered-users-list" 
               class="form-input" 
-              placeholder="Ej. Moisés, Admin Zeus" 
+              placeholder="Escribe tu usuario (ej. Moisés, Admin Zeus)" 
               autocomplete="username" 
               required 
             />
             <datalist id="registered-users-list">
-              <option value="Admin Zeus"></option>
-              <option value="Producción Zeus"></option>
+              <option value="Admin Zeus (Manager)"></option>
+              <option value="Producción Zeus (Taller)"></option>
             </datalist>
           </div>
-          <small class="form-help">Selecciona tu usuario de la lista o escribe tu nombre</small>
+          <small class="form-help">Escribe tu usuario o elígelo de las sugerencias</small>
         </div>
 
         <div class="form-group">
-          <label for="login-password"><i class="fa-solid fa-key"></i> Contraseña o PIN Personal</label>
+          <label for="login-password">Contraseña o PIN de Acceso</label>
           <div class="input-icon-wrap">
-            <span class="input-icon"><i class="fa-solid fa-lock"></i></span>
+            <span class="input-icon">🔒</span>
             <input 
               type="password" 
               id="login-password" 
               class="form-input" 
-              placeholder="PIN de acceso" 
+              placeholder="Ingresa tu contraseña o PIN" 
               autocomplete="current-password"
-              inputmode="numeric"
               required 
             />
           </div>
-          <small class="form-help">PIN predeterminado del sistema: <strong>1234</strong></small>
+          <small class="form-help">PIN predeterminado: <strong>1234</strong></small>
         </div>
 
         <button type="submit" id="btn-login-submit" class="btn-primary-gold">
-          <i class="fa-solid fa-right-to-bracket"></i>
-          <span>Ingresar al Sistema</span>
-        </button>
-
-        <button type="button" class="btn-secondary-subtle" onclick="forceCleanUpdate(true)">
-          <i class="fa-solid fa-arrows-rotate"></i>
-          <span>Actualizar app y limpiar caché local</span>
+          <span>⚡ Iniciar Sesión</span>
         </button>
 
         <p id="login-error-msg" class="login-error" style="display:none;"></p>
       </form>
 
       <div class="login-footer">
-        <p><i class="fa-solid fa-seedling"></i> Zeus Granola Fit &copy; 2026 &bull; Calidad y Energía Artesanal</p>
+        <p>Zeus Granola Fit · 2025 · Calidad Artesanal</p>
       </div>
     </div>
   </div>
@@ -110,96 +87,69 @@
        APLICACIÓN PRINCIPAL (TRAS INICIAR SESIÓN)
        ========================================== -->
   <div id="app" class="app-container" style="display:none;">
-    
-    <!-- Barra Superior Moderna (Glassmorphism & Branding Creaciones JJ Style) -->
+    <!-- Barra Superior -->
     <header class="top-bar">
       <div class="brand-area">
-        <div class="brand-logo-frame">
-          <img src="logo_zeus.jpg" alt="Zeus Logo" class="topbar-logo-img" onerror="this.style.display='none'">
-        </div>
+        <img src="logo_zeus.jpg" alt="Zeus Logo" class="topbar-logo-img">
         <div class="brand-text">
-          <div class="brand-title-row">
-            <h1 class="brand-title">ZEUS FIT</h1>
-            <span class="brand-badge-pill"><i class="fa-solid fa-bolt"></i> PROD</span>
-          </div>
-          <div class="brand-sub-row">
-            <p id="user-role-display" class="brand-sub">Admin Zeus &bull; Manager</p>
-            <span id="sync-status-indicator" class="sync-pill online" title="Estado de conexión">
-              <span class="sync-dot"></span> Sincronizado
-            </span>
-          </div>
+          <h1 class="brand-title">ZEUS FIT <span class="brand-lightning">⚡</span></h1>
+          <p id="user-role-display" class="brand-sub">Admin Zeus · Manager</p>
         </div>
       </div>
       
       <div class="top-actions">
-        <button id="btn-sync" class="top-action-btn" title="Sincronizar con Google Sheets">
-          <i class="fa-solid fa-rotate"></i>
-        </button>
-        <button id="btn-theme" class="top-action-btn" title="Alternar Modo Oscuro / Claro">
-          <i class="fa-solid fa-circle-half-stroke"></i>
-        </button>
-        <button id="btn-force-update" class="top-action-btn" onclick="forceCleanUpdate(true)" title="Actualizar aplicación y refrescar versión">
-          <i class="fa-solid fa-cloud-arrow-down"></i>
-        </button>
-        <button id="btn-logout" class="top-action-btn btn-danger-action" title="Cerrar Sesión">
-          <i class="fa-solid fa-power-off"></i>
-        </button>
+        <button id="btn-force-update" class="icon-btn" onclick="forceCleanUpdate(true)" title="Actualizar aplicación y limpiar caché">🔄</button>
+        <button id="btn-sync" class="icon-btn" title="Sincronizar con Google Sheets">↻</button>
+        <button id="btn-theme" class="icon-btn" title="Modo Oscuro / Claro">🌙</button>
+        <button id="btn-logout" class="icon-btn icon-btn-danger" title="Cerrar Sesión">🚪</button>
       </div>
     </header>
 
     <!-- Banner de Alertas Críticas -->
     <div id="critical-banner-container"></div>
 
-    <!-- Área de Contenido Principal -->
-    <main id="main-content" class="main-content">
-      <div class="loading-state">
-        <div class="spinner-zeus"></div>
-        <p>Cargando pedidos y tablero de Zeus Granola Fit...</p>
-      </div>
-    </main>
-
-    <!-- Barra de Navegación Inferior Flotante (5 pestañas estilo moderno) -->
+    <!-- Barra de Navegación Inferior (5 pestañas móviles perfectas) -->
     <nav class="nav-bar">
       <button class="nav-btn active" data-tab="today">
-        <div class="nav-icon-box">
-          <i class="fa-solid fa-calendar-day"></i>
-          <span id="badge-today-count" class="nav-badge" style="display:none;">0</span>
-        </div>
+        <span class="nav-icon">⚡</span>
         <span class="nav-label">Hoy</span>
+        <span id="badge-today-count" class="nav-count" style="display:none;">0</span>
       </button>
 
       <button class="nav-btn" data-tab="orders">
-        <div class="nav-icon-box">
-          <i class="fa-solid fa-boxes-stacked"></i>
-          <span id="badge-orders-count" class="nav-badge" style="display:none;">0</span>
-        </div>
+        <span class="nav-icon">📋</span>
         <span class="nav-label">Pedidos</span>
+        <span id="badge-orders-count" class="nav-count" style="display:none;">0</span>
       </button>
 
-      <button class="nav-btn nav-btn-center" data-tab="new-order" title="Nuevo Pedido">
+      <button class="nav-btn nav-btn-center" data-tab="new-order">
         <div class="nav-btn-center-inner">
-          <i class="fa-solid fa-plus"></i>
+          <span class="nav-icon">➕</span>
         </div>
         <span class="nav-label">Nuevo</span>
       </button>
 
       <button class="nav-btn" data-tab="finances">
-        <div class="nav-icon-box">
-          <i class="fa-solid fa-chart-pie"></i>
-        </div>
+        <span class="nav-icon">💶</span>
         <span class="nav-label">Finanzas</span>
       </button>
 
       <button class="nav-btn" data-tab="settings">
-        <div class="nav-icon-box">
-          <i class="fa-solid fa-sliders"></i>
-        </div>
+        <span class="nav-icon">⚙️</span>
         <span class="nav-label">Ajustes</span>
       </button>
     </nav>
+
+    <!-- Área de Contenido Principal -->
+    <main id="main-content" class="main-content">
+      <div class="loading-state">
+        <div class="spinner"></div>
+        <p>Cargando datos de Zeus Granola Fit...</p>
+      </div>
+    </main>
   </div>
 
-  <!-- Modal Global de Diálogo -->
+  <!-- Modal Global -->
   <div id="modal-overlay" class="modal-overlay" style="display:none;">
     <div class="modal-box">
       <div id="modal-body"></div>
