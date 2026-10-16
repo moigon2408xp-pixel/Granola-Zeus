@@ -43,7 +43,7 @@ self.addEventListener('message', (event) => {
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
 
-  // Red primero para la navegación HTML principal
+  // Red primero para la navegación HTML principal (permite detectar cambios de inmediato)
   if (e.request.mode === 'navigate') {
     e.respondWith(
       fetch(e.request).then((res) => {
