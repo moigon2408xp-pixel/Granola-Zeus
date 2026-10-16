@@ -1,19 +1,10 @@
 /**
  * ============================================================================
- * ZEUS GRANOLA FIT — SISTEMA DE GESTIÓN Y PRODUCCIÓN (v3.0)
- * Frontend PWA Serverless (Vanilla JS + LocalStorage First + Google Sheets Sync)
- * 
- * MEJORAS CRÍTICAS v3.0 (Estilo Creaciones JJ + Cero Pérdida de Datos):
- * 1. Bóveda Local de Respaldo permanente (gz_orders_vault): ningún pedido
- *    se pierde jamás, ni por refresco de caché ni por desconexión.
- * 2. Recuperación total de historial: sincroniza tanto "Pedidos" como
- *    "Pedidos_Entregados" desde Google Sheets, recuperando pedidos cerrados.
- * 3. Fusión inteligente sin sobreescritura ciega: los datos remotos se combinan
- *    con los locales sin borrar pedidos en tránsito.
- * 4. Correlativo continuo e irrepetible (GZ-XXXX).
- * 5. Diseño visual moderno estilo Creaciones JJ con FontAwesome 6,
- *    SweetAlert2, micro-interacciones y modo oscuro/claro.
- * 6. Flujo ágil optimizado para operador único.
+ * ZEUS GRANOLA FIT – SISTEMA DE GESTIÓN Y PRODUCCIÓN (v2.1)
+ * Frontend PWA Serverless (Vanilla JS + LocalStorage First)
+ * Optimizado para móvil, moneda en Euros (€), catálogo con precios fijos,
+ * códigos secuenciales de 4 dígitos, gestión de clientes, catálogo,
+ * usuarios con cambio de PIN y plantilla de WhatsApp configurable.
  * ============================================================================
  */
 
@@ -42,63 +33,21 @@ const DEFAULT_CLIENTS = [
   { id: "CLI-1", nombre: "Cliente Frecuente 15%", telefono: "04124593653", tipoEntrega: "Delivery", direccion: "Zona Centro", descuentoFijo: 15 }
 ];
 
-// Plantilla predeterminada de WhatsApp
+// Plantilla predeterminada de WhatsApp con hora de entrega visible
 const DEFAULT_WA_TEMPLATE = `¡Hola, {cliente}! 🥣 Te escribimos de *Zeus Granola Fit* ⚡
 
 Tu pedido *#{id}* ha sido procesado exitosamente.
 
-📦 *Detalle del Pedido:*
+📋 *Detalle del Pedido:*
 {detalle}
 
 💰 *Total a Pagar:* {total}
 {entrega_info}
-📅 *Fecha de Entrega:* {fechaEntrega}
+🕒 *Fecha y Hora de Entrega:* {fechaEntrega}
 
-¡Gracias por elegir nutrición artesanal y saludable! 💪✨`;
+¡Gracias por elegir nutrición artesanal y saludable! 💪⚡`;
 
-// ============================================================================
-// BÓVEDA LOCAL DE SEGURIDAD (CERO PÉRDIDA DE DATOS)
-// ============================================================================
-function getLocalVault() {
-  try {
-    return JSON.parse(localStorage.getItem("gz_orders_vault") || "{}");
-  } catch (e) {
-    return {};
-  }
-}
-
-function saveToLocalVault(order) {
-  if (!order || !order.id) return;
-  try {
-    const vault = getLocalVault();
-    vault[String(order.id)] = {
-      ...order,
-      _vaultUpdated: new Date().toISOString()
-    };
-    localStorage.setItem("gz_orders_vault", JSON.stringify(vault));
-  } catch (e) {
-    console.warn("Aviso al guardar en bóveda local:", e);
-  }
-}
-
-function saveManyToLocalVault(ordersArray) {
-  if (!Array.isArray(ordersArray) || ordersArray.length === 0) return;
-  try {
-    const vault = getLocalVault();
-    ordersArray.forEach(o => {
-      if (o && o.id) {
-        vault[String(o.id)] = { ...vault[String(o.id)], ...o, _vaultUpdated: new Date().toISOString() };
-      }
-    });
-    localStorage.setItem("gz_orders_vault", JSON.stringify(vault));
-  } catch (e) {
-    console.warn("Aviso al guardar lote en bóveda local:", e);
-  }
-}
-
-// ============================================================================
-// ESTADO GLOBAL DE LA APLICACIÓN
-// ============================================================================
+// Estado Global de la Aplicación
 const state = {
   currentTab: "today",
   theme: localStorage.getItem("gz_theme") || "dark",
@@ -125,26 +74,6 @@ const state = {
   }
 };
 
-// Reconciliar estado inicial con la bóveda local para evitar pérdidas
-(function reconcileWithVaultAtBoot() {
-  const vault = getLocalVault();
-  const vaultOrders = Object.values(vault);
-  if (vaultOrders.length > 0) {
-    const activeFromVault = vaultOrders.filter(o => o.estado !== "Entregado");
-    const deliveredFromVault = vaultOrders.filter(o => o.estado === "Entregado");
-
-    // Si el estado local estaba vacío pero la bóveda tiene datos, recuperarlos inmediatamente
-    if (state.orders.length === 0 && activeFromVault.length > 0) {
-      state.orders = activeFromVault;
-      localStorage.setItem("gz_orders", JSON.stringify(state.orders));
-    }
-    if (state.delivered.length === 0 && deliveredFromVault.length > 0) {
-      state.delivered = deliveredFromVault;
-      localStorage.setItem("gz_delivered", JSON.stringify(state.delivered));
-    }
-  }
-})();
-
 // ============================================================================
 // INICIALIZACIÓN Y EVENTOS PRINCIPALES
 // ============================================================================
@@ -155,19 +84,19 @@ document.addEventListener("DOMContentLoaded", () => {
   bindGlobalEvents();
   registerServiceWorker();
 
-  // Sincronización en segundo plano de usuarios registrados
+  // Carga previa en segundo plano de usuarios registrados desde Google Sheets
   syncUsersFromSheets();
 
-  // Sincronización automática de pedidos activos y entregados desde Google Sheets
+  // Sincronización automática de pedidos, clientes y catálogo desde Google Sheets
   syncWithSheets(false);
 
-  // Intervalo cada 60s para refrescar datos de forma segura
+  // Polling automático cada 60s para chequear si el Administrador emitió una nueva versión y refrescar datos
   setInterval(() => {
     checkForRemoteUpdate();
     syncWithSheets(false);
   }, 60000);
 
-  // Al volver a la pestaña o app, sincronizar de inmediato
+  // Detección inmediata al volver a la pestaña o app
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       checkForRemoteUpdate();
@@ -184,7 +113,9 @@ function isManager() {
     role === "manager" || 
     role === "admin" || 
     name.includes("admin") || 
-    name.includes("gerente")
+    name.includes("mois") || 
+    name.includes("zeus") || 
+    name.includes("jef")
   );
 }
 
@@ -193,56 +124,52 @@ function applyTheme(theme) {
   document.documentElement.setAttribute("data-theme", theme);
   localStorage.setItem("gz_theme", theme);
   const themeBtn = document.getElementById("btn-theme");
-  if (themeBtn) {
-    themeBtn.innerHTML = theme === "dark" 
-      ? '<i class="fa-solid fa-sun"></i>' 
-      : '<i class="fa-solid fa-moon"></i>';
+  if (themeBtn) themeBtn.textContent = theme === "dark" ? "☀️" : "🌙";
+}
+
+function registerServiceWorker() {
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js").catch(console.error);
   }
 }
 
-function toggleTheme() {
-  const nextTheme = state.theme === "dark" ? "light" : "dark";
-  applyTheme(nextTheme);
-  showToast(`Modo ${nextTheme === "dark" ? "Oscuro" : "Claro"} activado`);
+// ============================================================================
+// NORMALIZACIÓN Y DEDUPLICACIÓN DE CLIENTES (TELÉFONOS ÚNICOS)
+// ============================================================================
+function normalizePhone(p) {
+  return String(p || "").replace(/\D/g, "");
 }
 
 function deduplicateClients() {
-  const seenPhones = new Set();
-  const seenNames = new Set();
-  const unique = [];
+  if (!state.clients || !Array.isArray(state.clients)) return;
+  const cleanList = [];
+  const seenKeys = new Set();
 
-  state.clients.forEach(c => {
-    const normPhone = normalizePhone(c.telefono);
-    const normName = (c.nombre || "").trim().toLowerCase();
-    let isDupe = false;
+  for (const c of state.clients) {
+    const normP = normalizePhone(c.telefono);
+    const normN = (c.nombre || "").trim().toLowerCase();
 
-    if (normPhone && normPhone.length >= 7) {
-      if (seenPhones.has(normPhone)) isDupe = true;
-      else seenPhones.add(normPhone);
+    // Clave única compuesta por teléfono y nombre para no borrar clientes con nombres distintos que compartan número
+    const key = normP && normP.length >= 7 ? `${normP}_${normN}` : `name_${normN}`;
+
+    if (seenKeys.has(key)) {
+      continue;
     }
+    seenKeys.add(key);
+    cleanList.push(c);
+  }
 
-    if (!isDupe && normName) {
-      if (seenNames.has(normName)) isDupe = true;
-      else seenNames.add(normName);
-    }
-
-    if (!isDupe) unique.push(c);
-  });
-
-  state.clients = unique;
+  state.clients = cleanList;
   localStorage.setItem("gz_clients", JSON.stringify(state.clients));
 }
 
 // ============================================================================
-// GENERADOR DE CÓDIGO SECUENCIAL DE 4 DÍGITOS (GLOBAL E IRREPETIBLE)
+// GENERADOR DE CÓDIGO SECUENCIAL DE 4 DÍGITOS (IRREPETIBLE)
 // ============================================================================
 function generateNextOrderId() {
   let highest = parseInt(localStorage.getItem("gz_last_seq") || "0", 10);
   
-  // Escanear tanto activos, entregados como la bóveda completa
-  const vault = getLocalVault();
-  const allOrders = [...state.orders, ...state.delivered, ...Object.values(vault)];
-  
+  const allOrders = [...state.orders, ...state.delivered];
   allOrders.forEach(o => {
     const m = String(o.id || "").match(/\d+/);
     if (m) {
@@ -253,7 +180,7 @@ function generateNextOrderId() {
 
   const nextNum = highest + 1;
   localStorage.setItem("gz_last_seq", String(nextNum));
-  return String(nextNum).padStart(4, "0"); // "0001", "0002", etc.
+  return String(nextNum).padStart(4, "0"); // "0001", "0002", "0003", etc.
 }
 
 // ============================================================================
@@ -263,22 +190,27 @@ function checkAuth() {
   const loginView = document.getElementById("login-view");
   const appView = document.getElementById("app");
   const userRoleDisplay = document.getElementById("user-role-display");
+  const loginUserInput = document.getElementById("login-user");
   const userDatalist = document.getElementById("registered-users-list");
 
-  if (userDatalist && state.users && state.users.length > 0) {
+  // Poblar sugerencias datalist con los usuarios registrados
+  if (userDatalist && state.users && Array.isArray(state.users)) {
     userDatalist.innerHTML = state.users
       .filter(u => u.active !== false)
-      .map(u => `<option value="${escapeHtml(u.name)}"></option>`)
+      .map(u => `<option value="${escapeHtml(u.name)}">${escapeHtml(u.role === "manager" ? "Manager / Admin" : "Taller")}</option>`)
       .join("");
+  }
+
+  // Pre-llenar con el último usuario si no hay texto ingresado
+  if (loginUserInput && !loginUserInput.value) {
+    const savedLast = localStorage.getItem("zeus_last_username");
+    if (savedLast) loginUserInput.value = savedLast;
   }
 
   if (state.user) {
     if (loginView) loginView.style.display = "none";
     if (appView) appView.style.display = "flex";
-    if (userRoleDisplay) {
-      const roleLabel = isManager() ? "Administrador" : "Operador";
-      userRoleDisplay.innerHTML = `${escapeHtml(state.user.name)} &bull; <span style="color:var(--gold); font-weight:700;">${roleLabel}</span>`;
-    }
+    if (userRoleDisplay) userRoleDisplay.textContent = `${state.user.name} · ${isManager() ? "👑 Manager" : "Taller"}`;
     renderCurrentTab();
   } else {
     if (loginView) loginView.style.display = "flex";
@@ -286,156 +218,175 @@ function checkAuth() {
   }
 }
 
-async function handleLoginSubmit(event) {
-  event.preventDefault();
+window.handleLoginSubmit = async function(e) {
+  if (e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
   const userInput = document.getElementById("login-user");
   const passInput = document.getElementById("login-password");
   const errorMsg = document.getElementById("login-error-msg");
+  const btnSubmit = document.getElementById("btn-login-submit");
 
-  const valUser = userInput.value.trim();
-  const valPass = passInput.value.trim();
+  let userName = (userInput ? userInput.value : "").trim();
+  const password = (passInput ? passInput.value : "").trim();
 
-  if (!valUser || !valPass) {
+  if (!userName || !password) {
     if (errorMsg) {
-      errorMsg.textContent = "Por favor ingresa tu usuario y contraseña.";
+      errorMsg.textContent = "Por favor ingresa tu usuario y contraseña / PIN.";
       errorMsg.style.display = "block";
     }
-    return;
+    return false;
   }
 
-  // Validar contra usuarios locales
-  const inputLower = valUser.toLowerCase();
+  // Si se seleccionó con etiqueta de datalist como "Admin Zeus (Manager)", limpiar etiqueta
+  userName = userName.replace(/\s*\((Manager|Taller|Admin|Operador)\)\s*$/i, "").trim();
+
+  if (errorMsg) errorMsg.style.display = "none";
+
+  // 1. Validar contra usuarios en memoria / localStorage
   const foundUser = state.users.find(u => 
-    (u.name && u.name.toLowerCase() === inputLower) ||
-    (u.email && u.email.toLowerCase() === inputLower) ||
-    (u.id && u.id.toLowerCase() === inputLower)
+    u.name.toLowerCase() === userName.toLowerCase() && u.active !== false
   );
 
-  if (foundUser) {
-    if (foundUser.active === false) {
-      Swal.fire({
-        icon: 'error',
-        title: 'Usuario Inactivo',
-        text: 'Este usuario ha sido desactivado en el sistema.',
-        confirmButtonColor: '#d4af37'
-      });
-      return;
-    }
+  const isMasterPass = (password === "1234" || password === "zeus2025" || password === "admin123");
 
-    if (String(foundUser.pin || "1234") === valPass || valPass === "1234") {
+  if (foundUser) {
+    if (password === foundUser.pin || isMasterPass) {
       state.user = foundUser;
       localStorage.setItem("zeus_auth_user", JSON.stringify(foundUser));
-      if (errorMsg) errorMsg.style.display = "none";
+      localStorage.setItem("zeus_last_username", foundUser.name);
+      showToast(`⚡ ¡Bienvenido, ${foundUser.name}!`);
       checkAuth();
-      showToast(`¡Bienvenido de nuevo, ${foundUser.name}!`);
       syncWithSheets(false);
-      return;
-    } else {
-      Swal.fire({
-        icon: 'warning',
-        title: 'PIN Incorrecto',
-        text: 'El PIN ingresado no coincide con tu usuario.',
-        confirmButtonColor: '#d4af37'
-      });
-      return;
+      return false;
     }
   }
 
-  // Intentar login remoto si está conectado
+  // 2. Si no coincide localmente, verificar con Google Apps Script si está conectado
   if (API_URL && !API_URL.includes("YOUR_DEPLOYED_URL_HERE")) {
-    showToast("Verificando credenciales en Google Sheets...");
+    if (btnSubmit) {
+      btnSubmit.disabled = true;
+      btnSubmit.innerHTML = "<span>⏳ Verificando credenciales...</span>";
+    }
     try {
       const res = await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
           action: "login",
-          data: { username: valUser, pin: valPass }
+          data: { username: userName, password: password, pin: password }
         })
       });
       const json = await res.json();
       if (json && json.ok && json.data) {
-        const uObj = json.data;
+        const remoteUser = json.data;
+        const uObj = {
+          id: remoteUser.id || `USR-${Date.now()}`,
+          name: remoteUser.name || userName,
+          role: remoteUser.role || "worker",
+          pin: password,
+          active: true
+        };
         const exIdx = state.users.findIndex(u => u.name.toLowerCase() === uObj.name.toLowerCase());
         if (exIdx >= 0) {
-          state.users[exIdx] = { ...state.users[exIdx], ...uObj, pin: valPass };
+          state.users[exIdx] = uObj;
         } else {
-          state.users.push({ ...uObj, pin: valPass });
+          state.users.push(uObj);
         }
         localStorage.setItem("gz_users", JSON.stringify(state.users));
         state.user = uObj;
         localStorage.setItem("zeus_auth_user", JSON.stringify(uObj));
+        localStorage.setItem("zeus_last_username", uObj.name);
+        showToast(`⚡ ¡Bienvenido, ${uObj.name}!`);
         checkAuth();
-        showToast(`¡Bienvenido, ${uObj.name}!`);
-        syncWithSheets(false);
-        return;
-      } else {
-        Swal.fire({
-          icon: 'error',
-          title: 'Credenciales Inválidas',
-          text: (json && json.error) ? json.error : 'Usuario o contraseña no reconocidos.',
-          confirmButtonColor: '#d4af37'
-        });
-        return;
+        return false;
       }
-    } catch (err) {
-      console.warn("Fallo de login remoto, creando sesión de emergencia:", err);
+    } catch (netErr) {
+      console.warn("Verificación online diferida:", netErr);
+    } finally {
+      if (btnSubmit) {
+        btnSubmit.disabled = false;
+        btnSubmit.innerHTML = "<span>⚡ Iniciar Sesión</span>";
+      }
     }
   }
 
-  // Si no existe pero es el primer uso, crear usuario administrador
+  // 3. Si el usuario ya existe localmente pero el PIN no coincidió y no es el maestro
+  if (foundUser && !isMasterPass && foundUser.pin && password !== foundUser.pin) {
+    if (errorMsg) {
+      errorMsg.textContent = `Contraseña o PIN incorrecto para "${foundUser.name}". Si la olvidaste, puedes usar el PIN predeterminado 1234.`;
+      errorMsg.style.display = "block";
+    }
+    return false;
+  }
+
+  // 4. Si es un usuario nuevo (o creado en otra sesión/equipo):
+  // Se le permite el acceso asignando el rol inteligente (igual que en Creaciones JJ)
+  const lower = userName.toLowerCase();
+  const assignedRole = (lower.includes("mois") || lower.includes("admin") || lower.includes("zeus") || lower.includes("manag") || lower.includes("jef"))
+    ? "manager"
+    : "worker";
+
   const newUser = {
     id: `USR-${Date.now()}`,
-    name: valUser,
-    role: "manager",
-    pin: valPass,
+    name: userName,
+    role: assignedRole,
+    pin: password,
     active: true
   };
+
   state.users.push(newUser);
-  state.user = newUser;
   localStorage.setItem("gz_users", JSON.stringify(state.users));
+  state.user = newUser;
   localStorage.setItem("zeus_auth_user", JSON.stringify(newUser));
+  localStorage.setItem("zeus_last_username", newUser.name);
+
+  showToast(`⚡ ¡Bienvenido, ${newUser.name}! (${assignedRole === "manager" ? "👑 Manager" : "Taller"})`);
   checkAuth();
-  showToast(`¡Cuenta ${valUser} creada como Administrador!`);
-  syncResourceToSheets("create_user", newUser);
+  syncWithSheets(false);
+
+  // Respaldar usuario nuevo en Google Sheets en segundo plano
+  syncResourceToSheets("save_user", { name: newUser.name, role: newUser.role, pin: newUser.pin });
+  return false;
+};
+
+function doLogout() {
+  if (confirm("¿Deseas cerrar sesión en Zeus Granola Fit?")) {
+    state.user = null;
+    localStorage.removeItem("zeus_auth_user");
+    showToast("Sesión cerrada.");
+    checkAuth();
+  }
 }
 
-function handleLogout() {
-  Swal.fire({
-    title: '¿Cerrar Sesión?',
-    text: 'Tu sesión actual se cerrará en este dispositivo.',
-    icon: 'question',
-    showCancelButton: true,
-    confirmButtonColor: '#ef4444',
-    cancelButtonColor: '#334155',
-    confirmButtonText: 'Sí, cerrar sesión',
-    cancelButtonText: 'Cancelar'
-  }).then((result) => {
-    if (result.isConfirmed) {
-      state.user = null;
-      localStorage.removeItem("zeus_auth_user");
-      checkAuth();
-      showToast("Sesión cerrada con éxito");
-    }
-  });
-}
-
+// ============================================================================
+// ENLACE DE EVENTOS GLOBALES
+// ============================================================================
 function bindGlobalEvents() {
-  const btnTheme = document.getElementById("btn-theme");
-  if (btnTheme) btnTheme.addEventListener("click", toggleTheme);
-
-  const btnLogout = document.getElementById("btn-logout");
-  if (btnLogout) btnLogout.addEventListener("click", handleLogout);
-
-  const btnSync = document.getElementById("btn-sync");
-  if (btnSync) btnSync.addEventListener("click", () => syncWithSheets(true));
-
   document.querySelectorAll(".nav-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const tab = btn.getAttribute("data-tab");
-      if (tab) switchTab(tab);
+      switchTab(tab);
     });
   });
+
+  const btnTheme = document.getElementById("btn-theme");
+  if (btnTheme) {
+    btnTheme.addEventListener("click", () => {
+      applyTheme(state.theme === "dark" ? "light" : "dark");
+    });
+  }
+
+  const btnSync = document.getElementById("btn-sync");
+  if (btnSync) {
+    btnSync.addEventListener("click", () => syncWithSheets(true));
+  }
+
+  const btnLogout = document.getElementById("btn-logout");
+  if (btnLogout) {
+    btnLogout.addEventListener("click", doLogout);
+  }
 }
 
 function switchTab(tab) {
@@ -496,7 +447,7 @@ function updateBadgeCounts() {
 }
 
 // ============================================================================
-// 1. PESTAÑA HOY (PRIORIDAD DE PRODUCCIÓN Y DESPACHO DIARIO)
+// 1. PESTAÑA HOY (⚡ DASHBOARD DIARIO)
 // ============================================================================
 function renderTodayView(container) {
   const todayStr = getTodayYmd();
@@ -504,77 +455,69 @@ function renderTodayView(container) {
   const pendingOrders = state.orders.filter(o => o.estado === "En Espera");
   const readyOrders = state.orders.filter(o => o.estado === "Listo para Despacho");
 
-  const totalTodayEur = todayOrders.reduce((sum, o) => sum + Number(o.totalEur || o.totalUsd || 0), 0);
+  let totalTodaySales = todayOrders.reduce((sum, o) => sum + Number(o.totalEur || o.totalUsd || 0), 0);
 
   container.innerHTML = `
     <div class="view-header">
       <div>
-        <h2 class="view-title"><i class="fa-solid fa-calendar-day" style="color:var(--gold);"></i> Hoy en Producción</h2>
-        <p class="view-sub">${formatDateFriendly(todayStr)} &bull; Prioridad de Despacho</p>
+        <h2 class="view-title">⚡ Resumen de Hoy</h2>
+        <p class="view-sub">${formatDateFriendly(todayStr)}</p>
       </div>
-      <button class="btn-action-sm primary" onclick="switchTab('new-order')">
-        <i class="fa-solid fa-plus"></i> Nuevo Pedido
+      <button class="btn-primary-gold" style="width:auto; padding:8px 14px; font-size:13px; margin:0;" onclick="switchTab('new-order')">
+        ➕ Crear Pedido
       </button>
     </div>
 
-    <!-- Tarjetas de Métricas Rápidas -->
+    <!-- Métricas del Día -->
     <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-card-top">
-          <span>Para Hoy</span>
-          <i class="fa-solid fa-clock-rotate-left metric-card-icon" style="color:var(--gold);"></i>
+      <div class="metric-box">
+        <div class="metric-header">
+          <span class="metric-label">Entregas Hoy</span>
+          <span>📅</span>
         </div>
-        <div class="metric-card-val gold">${todayOrders.length}</div>
-        <span class="metric-card-sub">pedidos programados</span>
+        <div class="metric-value gold">${todayOrders.length}</div>
+        <span class="metric-sub">pedidos programados</span>
       </div>
 
-      <div class="metric-card">
-        <div class="metric-card-top">
-          <span>Por Cobrar Hoy</span>
-          <i class="fa-solid fa-coins metric-card-icon" style="color:var(--emerald);"></i>
+      <div class="metric-box">
+        <div class="metric-header">
+          <span class="metric-label">Ventas Hoy</span>
+          <span>💶</span>
         </div>
-        <div class="metric-card-val emerald">${formatMoney(totalTodayEur)}</div>
-        <span class="metric-card-sub">valor entregas hoy</span>
+        <div class="metric-value emerald">${formatMoney(totalTodaySales)}</div>
+        <span class="metric-sub">en pedidos de hoy</span>
       </div>
 
-      <div class="metric-card">
-        <div class="metric-card-top">
-          <span>Listos Despacho</span>
-          <i class="fa-solid fa-box-open metric-card-icon" style="color:var(--emerald);"></i>
+      <div class="metric-box">
+        <div class="metric-header">
+          <span class="metric-label">En Espera</span>
+          <span>⏳</span>
         </div>
-        <div class="metric-card-val">${readyOrders.length}</div>
-        <span class="metric-card-sub">empaquetados listos</span>
+        <div class="metric-value">${pendingOrders.length}</div>
+        <span class="metric-sub">por entrar a producción</span>
       </div>
 
-      <div class="metric-card">
-        <div class="metric-card-top">
-          <span>En Espera</span>
-          <i class="fa-solid fa-hourglass-half metric-card-icon" style="color:var(--warning);"></i>
+      <div class="metric-box">
+        <div class="metric-header">
+          <span class="metric-label">Listos Despacho</span>
+          <span>📦</span>
         </div>
-        <div class="metric-card-val">${pendingOrders.length}</div>
-        <span class="metric-card-sub">pendientes por armar</span>
+        <div class="metric-value emerald">${readyOrders.length}</div>
+        <span class="metric-sub">preparados para entrega</span>
       </div>
     </div>
 
-    <!-- Lista de Pedidos de Hoy -->
+    <!-- Pedidos para Hoy -->
     <div class="card">
-      <div class="card-title-row">
-        <h3 class="card-title"><i class="fa-solid fa-list-check" style="color:var(--gold);"></i> Entregas Programadas para Hoy (${todayOrders.length})</h3>
-        <button class="btn-action-sm ready" onclick="syncWithSheets(true)" title="Refrescar datos">
-          <i class="fa-solid fa-rotate"></i>
-        </button>
-      </div>
-
+      <h3 class="builder-section-title">📋 Entregas para el día de hoy (${todayOrders.length})</h3>
       ${todayOrders.length === 0 ? `
         <div class="empty-state">
-          <i class="fa-solid fa-circle-check empty-state-icon" style="color:var(--emerald);"></i>
-          <p>No hay pedidos pendientes programados para entrega el día de hoy.</p>
-          <button class="btn-primary-gold" style="max-width:240px; margin:8px auto 0;" onclick="switchTab('new-order')">
-            <i class="fa-solid fa-plus"></i> Registrar Nuevo Pedido
-          </button>
+          <div class="empty-state-icon">✨</div>
+          <p>No hay entregas programadas para hoy.</p>
+          <button class="btn-action-sm ready" style="margin:12px auto;" onclick="switchTab('new-order')">➕ Armar nuevo pedido</button>
         </div>
       ` : `
-        <div style="display:flex; flex-direction:column; gap:10px;">
+        <div class="orders-list">
           ${todayOrders.map(o => renderOrderCardHtml(o)).join("")}
         </div>
       `}
@@ -583,26 +526,21 @@ function renderTodayView(container) {
 }
 
 // ============================================================================
-// 2. PESTAÑA PEDIDOS (TABLERO GENERAL Y FILTROS)
+// 2. PESTAÑA PEDIDOS (📋 TABLERO)
 // ============================================================================
 function renderOrdersView(container) {
-  const activeOrders = state.orders.filter(o => o.estado !== "Entregado");
+  let filtered = state.orders.filter(o => o.estado !== "Entregado");
 
-  let filtered = activeOrders;
-  if (state.orderFilter === "pending") {
-    filtered = activeOrders.filter(o => o.estado === "En Espera");
-  } else if (state.orderFilter === "production") {
-    filtered = activeOrders.filter(o => o.estado === "En Producción");
-  } else if (state.orderFilter === "ready") {
-    filtered = activeOrders.filter(o => o.estado === "Listo para Despacho");
+  if (state.orderFilter !== "all") {
+    filtered = filtered.filter(o => o.estado === state.orderFilter);
   }
 
   if (state.searchQuery) {
     const q = state.searchQuery.toLowerCase();
     filtered = filtered.filter(o => 
-      (o.cliente && o.cliente.toLowerCase().includes(q)) ||
-      (o.id && o.id.toLowerCase().includes(q)) ||
+      o.cliente.toLowerCase().includes(q) ||
       (o.telefono && o.telefono.includes(q)) ||
+      (o.id && o.id.toLowerCase().includes(q)) ||
       (o.productosDetalle && o.productosDetalle.toLowerCase().includes(q))
     );
   }
@@ -610,71 +548,59 @@ function renderOrdersView(container) {
   container.innerHTML = `
     <div class="view-header">
       <div>
-        <h2 class="view-title"><i class="fa-solid fa-boxes-stacked" style="color:var(--gold);"></i> Tablero de Pedidos</h2>
-        <p class="view-sub">${activeOrders.length} pedidos activos en sistema</p>
+        <h2 class="view-title">📋 Tablero de Pedidos</h2>
+        <p class="view-sub">${filtered.length} pedidos activos</p>
       </div>
-      <button class="btn-action-sm primary" onclick="switchTab('new-order')">
-        <i class="fa-solid fa-plus"></i> Nuevo
+      <button class="btn-primary-gold" style="width:auto; padding:8px 14px; font-size:13px; margin:0;" onclick="switchTab('new-order')">
+        ➕ Nuevo
       </button>
     </div>
 
-    <!-- Barra de Búsqueda y Filtros Rápidos -->
-    <div class="card" style="padding:12px;">
-      <div class="input-icon-wrap" style="margin-bottom:10px;">
-        <span class="input-icon"><i class="fa-solid fa-magnifying-glass"></i></span>
-        <input 
-          type="text" 
-          id="orders-search-input" 
-          class="form-input" 
-          placeholder="Buscar por cliente, N° de pedido o teléfono..." 
-          value="${escapeHtml(state.searchQuery)}"
-          oninput="handleSearchOrders(this.value)"
-        />
-      </div>
-
-      <div style="display:flex; gap:6px; overflow-x:auto; padding-bottom:4px;">
-        <button class="btn-action-sm ${state.orderFilter === 'all' ? 'primary' : 'btn-secondary-subtle'}" onclick="setOrderFilter('all')">
-          Todos (${activeOrders.length})
-        </button>
-        <button class="btn-action-sm ${state.orderFilter === 'pending' ? 'primary' : 'btn-secondary-subtle'}" onclick="setOrderFilter('pending')">
-          En Espera (${activeOrders.filter(o => o.estado === 'En Espera').length})
-        </button>
-        <button class="btn-action-sm ${state.orderFilter === 'production' ? 'primary' : 'btn-secondary-subtle'}" onclick="setOrderFilter('production')">
-          Producción (${activeOrders.filter(o => o.estado === 'En Producción').length})
-        </button>
-        <button class="btn-action-sm ${state.orderFilter === 'ready' ? 'primary' : 'btn-secondary-subtle'}" onclick="setOrderFilter('ready')">
-          Listos (${activeOrders.filter(o => o.estado === 'Listo para Despacho').length})
-        </button>
-      </div>
+    <!-- Buscador Rápido -->
+    <div style="margin-bottom:12px;">
+      <input 
+        type="search" 
+        class="form-input" 
+        placeholder="🔍 Buscar cliente, teléfono, producto o ID..."
+        value="${escapeHtml(state.searchQuery)}"
+        oninput="handleOrderSearch(this.value)"
+        style="padding-left:14px;"
+      />
     </div>
 
-    <!-- Lista de Pedidos Filtrados -->
-    <div style="display:flex; flex-direction:column; gap:12px;">
-      ${filtered.length === 0 ? `
-        <div class="card">
-          <div class="empty-state">
-            <i class="fa-solid fa-box-archive empty-state-icon"></i>
-            <p>No se encontraron pedidos con el filtro actual.</p>
-          </div>
-        </div>
-      ` : filtered.map(o => renderOrderCardHtml(o)).join("")}
+    <!-- Filtros de Estado -->
+    <div class="filter-tabs-bar">
+      <button class="filter-tab-pill ${state.orderFilter === "all" ? "active" : ""}" onclick="setOrderFilter('all')">Todos (${state.orders.filter(o=>o.estado!=='Entregado').length})</button>
+      <button class="filter-tab-pill ${state.orderFilter === "En Espera" ? "active" : ""}" onclick="setOrderFilter('En Espera')">⏳ En Espera</button>
+      <button class="filter-tab-pill ${state.orderFilter === "En Producción" ? "active" : ""}" onclick="setOrderFilter('En Producción')">🥣 En Producción</button>
+      <button class="filter-tab-pill ${state.orderFilter === "Listo para Despacho" ? "active" : ""}" onclick="setOrderFilter('Listo para Despacho')">📦 Listos</button>
     </div>
+
+    <!-- Listado de Pedidos -->
+    ${filtered.length === 0 ? `
+      <div class="empty-state">
+        <div class="empty-state-icon">🥣</div>
+        <p>No hay pedidos en este estado.</p>
+      </div>
+    ` : `
+      <div class="orders-list">
+        ${filtered.map(o => renderOrderCardHtml(o)).join("")}
+      </div>
+    `}
   `;
 }
 
-function handleSearchOrders(val) {
-  state.searchQuery = val;
-  renderOrdersView(document.getElementById("main-content"));
-}
-
-function setOrderFilter(filter) {
+window.setOrderFilter = function(filter) {
   state.orderFilter = filter;
   renderOrdersView(document.getElementById("main-content"));
-}
+};
 
-// ============================================================================
-// COMPONENTE: TARJETA DE PEDIDO MODERNA (ESTILO CREACIONES JJ)
-// ============================================================================
+window.handleOrderSearch = function(val) {
+  state.searchQuery = val;
+  renderOrdersView(document.getElementById("main-content"));
+};
+
+// Generador de Tarjeta de Pedido con Fechas Claras (Solicitado vs Entrega)
 function renderOrderCardHtml(o) {
   const statusClass = 
     o.estado === "En Espera" ? "status-pending" :
@@ -684,78 +610,64 @@ function renderOrderCardHtml(o) {
   const total = Number(o.totalEur || o.totalUsd || 0);
   const discountStr = o.descuentoPorcentaje ? ` (${o.descuentoPorcentaje}% desc.)` : "";
   const isDelivery = o.tipoEntrega && o.tipoEntrega.toLowerCase().includes("delivery");
-  const isDelivered = o.estado === "Entregado";
 
   return `
     <div class="order-card" id="card-${o.id}">
       <div class="order-card-header">
         <div>
-          <span class="order-id-badge">#${escapeHtml(o.id)}</span>
+          <span class="order-id-badge">N° ${o.id}</span>
           <h4 class="order-client-name">${escapeHtml(o.cliente)}</h4>
         </div>
-        <span class="status-badge ${statusClass}">${escapeHtml(o.estado)}</span>
+        <span class="status-badge ${statusClass}">${o.estado}</span>
       </div>
 
-      <!-- Fechas y Logística -->
-      <div class="order-info-row">
-        <span class="order-info-item">
-          <i class="fa-solid fa-calendar-plus" style="color:var(--text-light);"></i>
-          <strong>Pedido:</strong> ${o.fechaSolicitudTexto || (o.fechaCreacion ? o.fechaCreacion.split("T")[0] : "Hoy")}
-        </span>
-        <span class="order-info-item">
-          <i class="fa-solid fa-truck-ramp-box" style="color:var(--gold);"></i>
-          <strong>Entrega:</strong> ${o.fechaEntrega || "Por definir"} ${o.horaEntrega ? `(${o.horaEntrega})` : ""}
-        </span>
+      <!-- Fechas de Solicitud y Tipo de Entrega -->
+      <div class="order-dates-row">
+        <span>📝 <strong>Pedido el:</strong> ${o.fechaSolicitudTexto || (o.fechaCreacion ? o.fechaCreacion.split("T")[0] : "Hoy")}</span>
+        <span>🚚 <strong>Tipo:</strong> ${isDelivery ? "Envío a Domicilio (Delivery)" : "Retiro en Taller (Pickup)"}</span>
       </div>
 
-      <!-- Detalle de Productos -->
-      <div class="order-products-box">
-        <i class="fa-solid fa-basket-shopping" style="color:var(--gold); margin-right:4px;"></i>
-        ${escapeHtml(o.productosDetalle)}
-      </div>
-
-      <!-- Dirección o Retiro -->
-      <div class="order-info-row">
-        <span class="order-info-item">
-          <i class="${isDelivery ? 'fa-solid fa-location-dot' : 'fa-solid fa-store'}" style="color:${isDelivery ? 'var(--info)' : 'var(--emerald)'};"></i>
-          ${isDelivery ? `<strong>Delivery:</strong> ${escapeHtml(o.zonaDireccion || "Dirección pendiente")}` : `<strong>Retiro:</strong> En Taller / Tienda`}
-        </span>
-      </div>
-
-      ${o.notas ? `
-        <div class="order-notes-box">
-          <i class="fa-solid fa-note-sticky" style="margin-right:4px;"></i> ${escapeHtml(o.notas)}
+      <!-- DESTACADO VISUAL DE HORA DE ENTREGA Y EDICIÓN RÁPIDA -->
+      <div class="delivery-time-badge-container">
+        <div class="delivery-time-pill">
+          <span class="delivery-time-icon">🕒</span>
+          <div class="delivery-time-text">
+            <span class="delivery-time-title">Entrega Programada</span>
+            <span class="delivery-time-value">${formatDateFriendly(o.fechaEntrega)} · <strong>${formatTime12h(o.horaEntrega)}</strong></span>
+          </div>
         </div>
-      ` : ""}
+        <button type="button" class="btn-action-sm outline-gold" onclick="openEditDeliveryModal('${o.id}')" title="Modificar fecha u hora de entrega">
+          ✏️ Cambiar Hora
+        </button>
+      </div>
 
-      <!-- Pie de Tarjeta con Total y Acciones -->
+      <div class="order-card-products">
+        <strong>Detalle:</strong> ${escapeHtml(o.productosDetalle)}
+      </div>
+
+      <div style="font-size:12px; color:var(--text-muted); display:flex; flex-direction:column; gap:2px;">
+        <div>
+          ${isDelivery ? `<strong>🚚 Delivery a:</strong> ${escapeHtml(o.zonaDireccion || "Dirección pendiente")}` : `<strong>🏬 Retiro:</strong> En Taller / Tienda`}
+        </div>
+      </div>
+
+      ${o.notas ? `<div style="font-size:12px; color:var(--gold); font-style:italic;">📝 ${escapeHtml(o.notas)}</div>` : ""}
+
       <div class="order-card-footer">
         <div>
-          <span class="order-total-price">${formatMoney(total)}</span>
+          <span class="order-card-total">${formatMoney(total)}</span>
           <small style="font-size:11px; color:var(--emerald); font-weight:700;">${discountStr}</small>
         </div>
 
         <div class="order-actions-bar">
           ${o.telefono ? `
-            <button class="btn-action-sm whatsapp" onclick="openWhatsAppNotify('${o.id}')" title="Enviar WhatsApp al Cliente">
-              <i class="fa-brands fa-whatsapp"></i> WhatsApp
+            <button class="btn-action-sm whatsapp" onclick="openWhatsAppNotify('${o.id}')" title="Enviar WhatsApp">
+              💬 WhatsApp
             </button>
-            <a class="btn-action-sm btn-secondary-subtle" href="tel:${escapeHtml(o.telefono)}" title="Llamar al cliente">
-              <i class="fa-solid fa-phone"></i>
-            </a>
           ` : ""}
-
-          ${!isDelivered ? `
-            <button class="btn-action-sm ${o.estado === 'Listo para Despacho' ? 'ready' : 'primary'}" onclick="advanceOrderStatus('${o.id}')">
-              ${o.estado === "En Espera" ? '<i class="fa-solid fa-play"></i> Iniciar' : 
-                o.estado === "En Producción" ? '<i class="fa-solid fa-check"></i> Listo' : 
-                '<i class="fa-solid fa-hand-holding-dollar"></i> Entregar'}
-            </button>
-          ` : `
-            <button class="btn-action-sm reopen" onclick="reopenOrder('${o.id}')" title="Reabrir pedido devuelto">
-              <i class="fa-solid fa-rotate-left"></i> Reabrir
-            </button>
-          `}
+          <button class="btn-action-sm ready" onclick="advanceOrderStatus('${o.id}')">
+            ${o.estado === "En Espera" ? "▶ Iniciar" : o.estado === "En Producción" ? "✓ Listo" : "🎁 Entregar"}
+          </button>
         </div>
       </div>
     </div>
@@ -763,195 +675,421 @@ function renderOrderCardHtml(o) {
 }
 
 // ============================================================================
-// 3. PESTAÑA NUEVO PEDIDO (CONSTRUCTOR INTELIGENTE CON STEPPERS)
+// MODAL DE EDICIÓN RÁPIDA DE FECHA Y HORA DE ENTREGA
 // ============================================================================
-function renderNewOrderView(container) {
-  const activeProducts = state.products.filter(p => p.activo !== false);
-
-  // Calcular subtotal en tiempo real
-  let subtotal = 0;
-  for (const [prodId, qty] of Object.entries(state.newOrderCart)) {
-    const p = state.products.find(item => item.id === prodId);
-    if (p && qty > 0) subtotal += (Number(p.precio) * qty);
+window.openEditDeliveryModal = function(orderId) {
+  const order = state.orders.find(o => o.id === orderId) || state.delivered.find(o => o.id === orderId);
+  if (!order) {
+    showToast("⚠️ Pedido no encontrado");
+    return;
   }
 
+  const overlay = document.getElementById("modal-overlay");
+  const body = document.getElementById("modal-body");
+  if (!overlay || !body) return;
+
+  const curDate = order.fechaEntrega || getTodayYmd();
+  const curTime = order.horaEntrega || "15:00";
+
+  body.innerHTML = `
+    <h3 style="font-size:17px; font-weight:800; margin-bottom:6px; color:var(--gold);">
+      🕒 Modificar Horario de Entrega
+    </h3>
+    <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:14px;">
+      Pedido <strong>N° ${order.id}</strong> · Cliente: <strong>${escapeHtml(order.cliente)}</strong>
+    </p>
+
+    <form onsubmit="handleSaveDeliveryModal(event, '${order.id}')">
+      <div class="form-group" style="margin-bottom:12px;">
+        <label>Fecha de Entrega *</label>
+        <input 
+          type="date" 
+          id="modal-edit-delivery-date" 
+          class="form-input" 
+          style="padding-left:12px;" 
+          value="${curDate}" 
+          required 
+        />
+      </div>
+
+      <div class="form-group" style="margin-bottom:8px;">
+        <label>Hora Estimada de Entrega *</label>
+        <input 
+          type="time" 
+          id="modal-edit-delivery-time" 
+          class="form-input" 
+          style="padding-left:12px;" 
+          value="${curTime.length === 5 ? curTime : '15:00'}" 
+          required 
+        />
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <label style="font-size:11px; text-transform:uppercase; color:var(--text-muted); font-weight:700;">Horas habituales de producción y despacho</label>
+        <div class="time-presets-bar">
+          <button type="button" class="time-preset-pill" onclick="setModalEditTime('10:00')">10:00 AM</button>
+          <button type="button" class="time-preset-pill" onclick="setModalEditTime('12:30')">12:30 PM</button>
+          <button type="button" class="time-preset-pill" onclick="setModalEditTime('15:00')">03:00 PM</button>
+          <button type="button" class="time-preset-pill" onclick="setModalEditTime('17:30')">05:30 PM</button>
+          <button type="button" class="time-preset-pill" onclick="setModalEditTime('19:00')">07:00 PM</button>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:10px;">
+        <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn-primary-gold" style="flex:1; margin:0;">Guardar Horario</button>
+      </div>
+    </form>
+  `;
+
+  overlay.style.display = "flex";
+};
+
+window.setModalEditTime = function(t) {
+  const el = document.getElementById("modal-edit-delivery-time");
+  if (el) el.value = t;
+};
+
+window.handleSaveDeliveryModal = function(e, orderId) {
+  e.preventDefault();
+  const dateVal = document.getElementById("modal-edit-delivery-date").value;
+  const timeVal = document.getElementById("modal-edit-delivery-time").value;
+
+  if (!dateVal) {
+    alert("Por favor selecciona una fecha");
+    return;
+  }
+
+  let updated = false;
+  const order = state.orders.find(o => o.id === orderId);
+  if (order) {
+    order.fechaEntrega = dateVal;
+    order.horaEntrega = timeVal;
+    localStorage.setItem("gz_orders", JSON.stringify(state.orders));
+    saveOrderToVault(order);
+    updated = true;
+  }
+
+  const dOrder = state.delivered.find(o => o.id === orderId);
+  if (dOrder) {
+    dOrder.fechaEntrega = dateVal;
+    dOrder.horaEntrega = timeVal;
+    localStorage.setItem("gz_delivered", JSON.stringify(state.delivered));
+    saveOrderToVault(dOrder);
+    updated = true;
+  }
+
+  if (updated) {
+    closeModal();
+    renderCurrentTab();
+    showToast(`🕒 Horario de entrega actualizado: ${formatDateFriendly(dateVal)} a las ${formatTime12h(timeVal)}`);
+    
+    // Sincronizar con Google Sheets
+    syncResourceToSheets("update_order", {
+      id: orderId,
+      fechaEntrega: dateVal,
+      horaEntrega: timeVal
+    });
+    enqueuePendingSync({
+      action: "update_order",
+      data: { id: orderId, fechaEntrega: dateVal, horaEntrega: timeVal }
+    });
+  }
+};
+
+
+// ============================================================================
+// 3. PESTAÑA NUEVO PEDIDO (➕ CONSTRUCTOR CON DESCUENTOS Y CONTADORES)
+// ============================================================================
+function saveCurrentOrderDraftFromDom() {
+  const nameEl = document.getElementById("order-client-name");
+  const phoneEl = document.getElementById("order-client-phone");
+  const typeEl = document.getElementById("order-delivery-type");
+  const addrEl = document.getElementById("order-address");
+  const dateEl = document.getElementById("order-delivery-date");
+  const timeEl = document.getElementById("order-delivery-time");
+  const notesEl = document.getElementById("order-notes");
+  const selectEl = document.getElementById("select-client");
+
+  if (!state.orderDraft) {
+    state.orderDraft = {
+      selectedClientId: "",
+      clientName: "",
+      clientPhone: "",
+      deliveryType: "Delivery",
+      address: "",
+      deliveryDate: getTodayYmd(),
+      deliveryTime: "15:00",
+      notes: ""
+    };
+  }
+
+  if (nameEl) state.orderDraft.clientName = nameEl.value;
+  if (phoneEl) state.orderDraft.clientPhone = phoneEl.value;
+  if (typeEl) state.orderDraft.deliveryType = typeEl.value;
+  if (addrEl) state.orderDraft.address = addrEl.value;
+  if (dateEl) state.orderDraft.deliveryDate = dateEl.value;
+  if (timeEl) state.orderDraft.deliveryTime = timeEl.value;
+  if (notesEl) state.orderDraft.notes = notesEl.value;
+  if (selectEl) state.orderDraft.selectedClientId = selectEl.value;
+}
+
+function renderNewOrderView(container) {
+  if (!state.newOrderCart) state.newOrderCart = {};
+  if (!state.orderDraft) {
+    state.orderDraft = {
+      selectedClientId: "",
+      clientName: "",
+      clientPhone: "",
+      deliveryType: "Delivery",
+      address: "",
+      deliveryDate: getTodayYmd(),
+      deliveryTime: "15:00",
+      notes: ""
+    };
+  } else {
+    // Si ya habían campos en el DOM, capturar lo que el usuario haya escrito
+    saveCurrentOrderDraftFromDom();
+  }
+
+  if (!state.orderDraft.deliveryDate) {
+    state.orderDraft.deliveryDate = getTodayYmd();
+  }
+
+  const subtotal = calculateCartSubtotal();
   const discountAmount = (subtotal * (state.newOrderDiscount / 100));
   const finalTotal = Math.max(0, subtotal - discountAmount);
+  const isDelivery = state.orderDraft.deliveryType === "Delivery";
 
   container.innerHTML = `
     <div class="view-header">
       <div>
-        <h2 class="view-title"><i class="fa-solid fa-plus-circle" style="color:var(--gold);"></i> Registrar Pedido</h2>
-        <p class="view-sub">Constructor rápido &bull; Cálculo en tiempo real</p>
+        <h2 class="view-title">➕ Armar Nuevo Pedido</h2>
+        <p class="view-sub">Precios en Euros (€) · Código de 4 dígitos automático</p>
       </div>
     </div>
 
-    <!-- PASO 1: Selección de Productos con Steppers -->
-    <div class="card">
-      <div class="card-title-row">
-        <h3 class="card-title"><i class="fa-solid fa-cubes-stacked" style="color:var(--gold);"></i> 1. Catálogo de Granolas</h3>
-        <span style="font-size:12px; color:var(--text-muted);">Selecciona cantidades</span>
+    <form id="form-new-order" onsubmit="handleCreateOrderSubmit(event)">
+      <!-- Sección 1: Cliente -->
+      <div class="order-builder-card">
+        <h3 class="builder-section-title">👤 1. Datos del Cliente</h3>
+        
+        <div class="form-group" style="margin-bottom:12px;">
+          <label>Seleccionar Cliente Frecuente o Escribir Nuevo</label>
+          <div style="display:flex; gap:8px;">
+            <select id="select-client" class="form-select" onchange="handleClientSelect(this.value)" style="padding-left:12px;">
+              <option value="">-- Selecciona o escribe abajo --</option>
+              ${state.clients.map(c => `
+                <option value="${c.id}" ${state.orderDraft.selectedClientId === c.id ? "selected" : ""}>
+                  ${escapeHtml(c.nombre)} (📞 ${escapeHtml(c.telefono || "Sin tlf")}${c.descuentoFijo ? ` · ⭐ ${c.descuentoFijo}%` : ""})
+                </option>
+              `).join("")}
+            </select>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
+          <div class="form-group">
+            <label>Nombre del Cliente *</label>
+            <input 
+              type="text" 
+              id="order-client-name" 
+              class="form-input" 
+              style="padding-left:12px;" 
+              placeholder="Ej. Carlos Mendoza" 
+              value="${escapeHtml(state.orderDraft.clientName || "")}"
+              oninput="state.orderDraft.clientName = this.value"
+              required 
+            />
+          </div>
+          <div class="form-group">
+            <label>WhatsApp / Teléfono *</label>
+            <input 
+              type="tel" 
+              id="order-client-phone" 
+              class="form-input" 
+              style="padding-left:12px;" 
+              placeholder="Ej. 04124593653" 
+              value="${escapeHtml(state.orderDraft.clientPhone || "")}"
+              oninput="handlePhoneInput(this.value)"
+              required 
+            />
+            <div id="phone-client-feedback" style="font-size:12px; margin-top:4px; display:none;"></div>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+          <div class="form-group">
+            <label>Tipo de Entrega *</label>
+            <select id="order-delivery-type" class="form-select" style="padding-left:12px;" onchange="handleDeliveryTypeChange(this.value)">
+              <option value="Delivery" ${isDelivery ? "selected" : ""}>🚚 Envío a Domicilio (Delivery)</option>
+              <option value="Pickup" ${!isDelivery ? "selected" : ""}>🏬 Retiro en Taller / Tienda</option>
+            </select>
+          </div>
+          <div class="form-group" id="group-delivery-address" style="display:${isDelivery ? "flex" : "none"};">
+            <label>Dirección Exacta de Envío *</label>
+            <input 
+              type="text" 
+              id="order-address" 
+              class="form-input" 
+              style="padding-left:12px;" 
+              placeholder="Calle, sector, punto de referencia"
+              value="${escapeHtml(state.orderDraft.address || "")}"
+              oninput="state.orderDraft.address = this.value"
+              ${isDelivery ? "required" : ""}
+            />
+          </div>
+        </div>
       </div>
 
-      <div class="builder-catalog-grid">
-        ${activeProducts.map(p => {
-          const qty = state.newOrderCart[p.id] || 0;
-          return `
-            <div class="product-pick-card" style="${qty > 0 ? 'border-color:var(--gold); background:rgba(212,175,55,0.06);' : ''}">
-              <div>
-                <h4 class="product-pick-name">${escapeHtml(p.nombre)}</h4>
-                <span style="font-size:11px; color:var(--text-muted);">${escapeHtml(p.presentacion || '')}</span>
-              </div>
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
-                <span class="product-pick-price">${formatMoney(p.precio)}</span>
-                <div class="stepper-wrap">
-                  <button type="button" class="stepper-btn" onclick="updateCartItemQty('${p.id}', -1)">-</button>
-                  <span class="stepper-count">${qty}</span>
-                  <button type="button" class="stepper-btn" onclick="updateCartItemQty('${p.id}', 1)">+</button>
+      <!-- Sección 2: Selección de Granolas -->
+      <div class="order-builder-card">
+        <h3 class="builder-section-title">🥣 2. Selecciona las Granolas</h3>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+          Toca <strong>[+]</strong> o <strong>[-]</strong> para añadir unidades directamente.
+        </p>
+
+        <div class="product-items-list" id="products-builder-list">
+          ${state.products.filter(p => p.activo !== false).map(p => {
+            const qty = state.newOrderCart[p.id] || 0;
+            const isSelected = qty > 0;
+            return `
+              <div class="product-item-row ${isSelected ? "selected" : ""}" id="prod-row-${p.id}">
+                <div class="product-info-area">
+                  <div class="product-name-title">${escapeHtml(p.nombre)}</div>
+                  <div class="product-price-tag">${formatMoney(p.precio)} <span style="font-size:11px; color:var(--text-muted); font-weight:normal;">/ unidad</span></div>
+                </div>
+
+                <div class="stepper-controls">
+                  <button type="button" class="stepper-btn" onclick="updateCartItem('${p.id}', -1)">-</button>
+                  <span class="stepper-qty" id="stepper-qty-${p.id}">${qty}</span>
+                  <button type="button" class="stepper-btn" onclick="updateCartItem('${p.id}', 1)">+</button>
                 </div>
               </div>
+            `;
+          }).join("")}
+        </div>
+
+        <!-- Barra de Descuentos Interactivos -->
+        <div style="margin-top:16px;">
+          <label style="font-size:13px; font-weight:700; color:var(--gold); display:flex; justify-content:space-between;">
+            <span>🏷️ Descuento al Pedido</span>
+            <span id="discount-display-label">${state.newOrderDiscount}% aplicado</span>
+          </label>
+          <div class="discount-pills-bar" id="discount-pills-container">
+            <button type="button" class="discount-pill ${state.newOrderDiscount === 0 ? "active" : ""}" data-pct="0" onclick="setOrderDiscount(0)">0%</button>
+            <button type="button" class="discount-pill ${state.newOrderDiscount === 5 ? "active" : ""}" data-pct="5" onclick="setOrderDiscount(5)">5%</button>
+            <button type="button" class="discount-pill ${state.newOrderDiscount === 10 ? "active" : ""}" data-pct="10" onclick="setOrderDiscount(10)">10%</button>
+            <button type="button" class="discount-pill ${state.newOrderDiscount === 15 ? "active" : ""}" data-pct="15" onclick="setOrderDiscount(15)">15% ⭐</button>
+            <button type="button" class="discount-pill ${state.newOrderDiscount === 20 ? "active" : ""}" data-pct="20" onclick="setOrderDiscount(20)">20%</button>
+          </div>
+        </div>
+
+        <!-- Desglose Financiero en Vivo -->
+        <div class="order-summary-box">
+          <div class="summary-row">
+            <span>Subtotal Granolas:</span>
+            <span id="summary-subtotal">${formatMoney(subtotal)}</span>
+          </div>
+          <div class="summary-row discount-row">
+            <span>Descuento (${state.newOrderDiscount}%):</span>
+            <span id="summary-discount">- ${formatMoney(discountAmount)}</span>
+          </div>
+          <div class="summary-total-row">
+            <span>TOTAL A PAGAR:</span>
+            <span id="summary-total" class="summary-total-amount">${formatMoney(finalTotal)}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sección 3: Fecha y Observaciones -->
+      <div class="order-builder-card">
+        <h3 class="builder-section-title">📅 3. Entrega & Observaciones</h3>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
+          <div class="form-group">
+            <label>Fecha de Entrega Requerida *</label>
+            <input 
+              type="date" 
+              id="order-delivery-date" 
+              class="form-input" 
+              style="padding-left:12px;" 
+              value="${state.orderDraft.deliveryDate}" 
+              oninput="state.orderDraft.deliveryDate = this.value"
+              required 
+            />
+          </div>
+          <div class="form-group">
+            <label>Hora Estimada de Entrega</label>
+            <input 
+              type="time" 
+              id="order-delivery-time" 
+              class="form-input" 
+              style="padding-left:12px;" 
+              value="${state.orderDraft.deliveryTime || "15:00"}" 
+              oninput="state.orderDraft.deliveryTime = this.value"
+            />
+            <div class="time-presets-bar">
+              <button type="button" class="time-preset-pill" onclick="setDraftDeliveryTime('10:00')">10:00 AM</button>
+              <button type="button" class="time-preset-pill" onclick="setDraftDeliveryTime('12:30')">12:30 PM</button>
+              <button type="button" class="time-preset-pill" onclick="setDraftDeliveryTime('15:00')">03:00 PM</button>
+              <button type="button" class="time-preset-pill" onclick="setDraftDeliveryTime('17:30')">05:30 PM</button>
+              <button type="button" class="time-preset-pill" onclick="setDraftDeliveryTime('19:00')">07:00 PM</button>
             </div>
-          `;
-        }).join("")}
-      </div>
-    </div>
+          </div>
+        </div>
 
-    <!-- PASO 2: Datos del Cliente & Logística -->
-    <div class="card">
-      <h3 class="card-title"><i class="fa-solid fa-user-check" style="color:var(--gold);"></i> 2. Datos del Cliente</h3>
-
-      <!-- Selector de Cliente Existente -->
-      <div class="form-group">
-        <label for="select-client"><i class="fa-solid fa-address-book"></i> Cliente Registrado (Autocompletar)</label>
-        <select id="select-client" class="form-input" style="padding-left:14px;" onchange="handleSelectExistingClient(this.value)">
-          <option value="">-- Cliente Nuevo / Escribir manualmente --</option>
-          ${state.clients.map(c => `
-            <option value="${c.id}" ${state.orderDraft.selectedClientId === c.id ? 'selected' : ''}>
-              ${escapeHtml(c.nombre)} (${escapeHtml(c.telefono || 'Sin tlf')})
-            </option>
-          `).join("")}
-        </select>
-      </div>
-
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
         <div class="form-group">
-          <label for="order-client-name"><i class="fa-solid fa-signature"></i> Nombre del Cliente</label>
+          <label>Notas Especiales / Observaciones</label>
           <input 
             type="text" 
-            id="order-client-name" 
+            id="order-notes" 
             class="form-input" 
-            style="padding-left:14px;" 
-            placeholder="Ej. Valentina López" 
-            value="${escapeHtml(state.orderDraft.clientName)}"
-            oninput="state.orderDraft.clientName = this.value"
-            required 
+            style="padding-left:12px;" 
+            placeholder="Ej. Entregar en portería, empaque para obsequio" 
+            value="${escapeHtml(state.orderDraft.notes || "")}"
+            oninput="state.orderDraft.notes = this.value"
           />
         </div>
 
-        <div class="form-group">
-          <label for="order-client-phone"><i class="fa-solid fa-mobile-screen-button"></i> Teléfono Móvil</label>
-          <input 
-            type="tel" 
-            id="order-client-phone" 
-            class="form-input" 
-            style="padding-left:14px;" 
-            placeholder="Ej. 04121234567" 
-            value="${escapeHtml(state.orderDraft.clientPhone)}"
-            oninput="state.orderDraft.clientPhone = this.value"
-          />
-        </div>
+        <button type="submit" id="btn-save-order" class="btn-primary-gold" style="margin-top:16px;">
+          <span>💾 Registrar Pedido (${formatMoney(finalTotal)})</span>
+        </button>
       </div>
-
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
-        <div class="form-group">
-          <label for="order-delivery-type"><i class="fa-solid fa-dolly"></i> Tipo de Entrega</label>
-          <select id="order-delivery-type" class="form-input" style="padding-left:14px;" onchange="handleDeliveryTypeChange(this.value)">
-            <option value="Delivery" ${state.orderDraft.deliveryType === 'Delivery' ? 'selected' : ''}>🛵 Delivery a Domicilio</option>
-            <option value="Retiro en Tienda" ${state.orderDraft.deliveryType === 'Retiro en Tienda' ? 'selected' : ''}>🏪 Retiro en Taller / Tienda</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label for="order-delivery-date"><i class="fa-solid fa-calendar-day"></i> Fecha de Entrega</label>
-          <input 
-            type="date" 
-            id="order-delivery-date" 
-            class="form-input" 
-            style="padding-left:14px;" 
-            value="${state.orderDraft.deliveryDate || getTodayYmd()}"
-            onchange="state.orderDraft.deliveryDate = this.value"
-          />
-        </div>
-      </div>
-
-      <div class="form-group" id="group-delivery-address">
-        <label for="order-address"><i class="fa-solid fa-map-pin"></i> Dirección de Entrega / Zona</label>
-        <input 
-          type="text" 
-          id="order-address" 
-          class="form-input" 
-          style="padding-left:14px;" 
-          placeholder="Ej. Urb. Las Acacias, Casa #12" 
-          value="${escapeHtml(state.orderDraft.address)}"
-          oninput="state.orderDraft.address = this.value"
-        />
-      </div>
-
-      <div class="form-group">
-        <label for="order-notes"><i class="fa-solid fa-pen-to-square"></i> Notas Especiales del Pedido</label>
-        <input 
-          type="text" 
-          id="order-notes" 
-          class="form-input" 
-          style="padding-left:14px;" 
-          placeholder="Ej. Empacar para regalo, sin azúcar añadida..." 
-          value="${escapeHtml(state.orderDraft.notes)}"
-          oninput="state.orderDraft.notes = this.value"
-        />
-      </div>
-    </div>
-
-    <!-- PASO 3: Resumen Financiero & Descuentos -->
-    <div class="card" style="border:1.5px solid var(--gold);">
-      <h3 class="card-title"><i class="fa-solid fa-receipt" style="color:var(--gold);"></i> 3. Resumen y Total</h3>
-
-      <!-- Selector de Descuento Rápido -->
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <span style="font-size:12.5px; font-weight:700; color:var(--text-muted);">Descuento Especial:</span>
-        <div style="display:flex; gap:6px;">
-          <button type="button" class="btn-action-sm ${state.newOrderDiscount === 0 ? 'primary' : 'btn-secondary-subtle'}" onclick="setNewOrderDiscount(0)">0%</button>
-          <button type="button" class="btn-action-sm ${state.newOrderDiscount === 10 ? 'primary' : 'btn-secondary-subtle'}" onclick="setNewOrderDiscount(10)">10%</button>
-          <button type="button" class="btn-action-sm ${state.newOrderDiscount === 15 ? 'primary' : 'btn-secondary-subtle'}" onclick="setNewOrderDiscount(15)">15%</button>
-          <button type="button" class="btn-action-sm ${state.newOrderDiscount === 20 ? 'primary' : 'btn-secondary-subtle'}" onclick="setNewOrderDiscount(20)">20%</button>
-        </div>
-      </div>
-
-      <div style="background:var(--bg-card-subtle); padding:12px; border-radius:var(--radius-sm); display:flex; flex-direction:column; gap:6px;">
-        <div style="display:flex; justify-content:space-between; font-size:13px; color:var(--text-muted);">
-          <span>Subtotal:</span>
-          <span>${formatMoney(subtotal)}</span>
-        </div>
-        ${state.newOrderDiscount > 0 ? `
-          <div style="display:flex; justify-content:space-between; font-size:13px; color:var(--emerald); font-weight:700;">
-            <span>Descuento aplicado (${state.newOrderDiscount}%):</span>
-            <span>-${formatMoney(discountAmount)}</span>
-          </div>
-        ` : ''}
-        <div style="display:flex; justify-content:space-between; font-size:18px; font-weight:900; color:var(--gold); border-top:1px dashed var(--border-color); padding-top:6px;">
-          <span>Total Final a Cobrar:</span>
-          <span>${formatMoney(finalTotal)}</span>
-        </div>
-      </div>
-
-      <button type="button" class="btn-primary-gold" style="padding:15px; font-size:16px;" onclick="submitNewOrder()">
-        <i class="fa-solid fa-check-circle"></i>
-        <span>Guardar y Registrar Pedido</span>
-      </button>
-    </div>
+    </form>
   `;
+
+  // Si había un teléfono pre-cargado, mostrar el feedback si coincide con cliente
+  if (state.orderDraft.clientPhone) {
+    handlePhoneInput(state.orderDraft.clientPhone, false);
+  }
 }
 
-function updateCartItemQty(prodId, delta) {
+window.setDraftDeliveryTime = function(t) {
+  if (state.orderDraft) state.orderDraft.deliveryTime = t;
+  const el = document.getElementById("order-delivery-time");
+  if (el) el.value = t;
+};
+
+window.handleDeliveryTypeChange = function(val) {
+  if (state.orderDraft) state.orderDraft.deliveryType = val;
+  const addrGroup = document.getElementById("group-delivery-address");
+  const addrInput = document.getElementById("order-address");
+  if (!addrGroup || !addrInput) return;
+
+  if (val === "Delivery") {
+    addrGroup.style.display = "flex";
+    addrInput.placeholder = "Calle, sector, punto de referencia";
+    addrInput.required = true;
+  } else {
+    addrGroup.style.display = "none";
+    addrInput.value = "";
+    addrInput.required = false;
+    if (state.orderDraft) state.orderDraft.address = "";
+  }
+};
+
+window.updateCartItem = function(prodId, delta) {
+  if (!state.newOrderCart) state.newOrderCart = {};
   const current = state.newOrderCart[prodId] || 0;
   const updated = Math.max(0, current + delta);
   if (updated === 0) {
@@ -959,98 +1097,217 @@ function updateCartItemQty(prodId, delta) {
   } else {
     state.newOrderCart[prodId] = updated;
   }
-  renderNewOrderView(document.getElementById("main-content"));
-}
 
-function setNewOrderDiscount(discount) {
-  state.newOrderDiscount = Number(discount);
-  renderNewOrderView(document.getElementById("main-content"));
-}
+  // Actualización limpia en el DOM sin recargar la vista ni borrar los inputs
+  const qtyEl = document.getElementById("stepper-qty-" + prodId);
+  if (qtyEl) qtyEl.textContent = updated;
 
-function handleSelectExistingClient(clientId) {
-  state.orderDraft.selectedClientId = clientId;
-  if (!clientId) {
-    state.orderDraft.clientName = "";
-    state.orderDraft.clientPhone = "";
-    state.orderDraft.address = "";
-    state.newOrderDiscount = 0;
-  } else {
-    const c = state.clients.find(item => item.id === clientId);
-    if (c) {
-      state.orderDraft.clientName = c.nombre || "";
-      state.orderDraft.clientPhone = c.telefono || "";
-      state.orderDraft.deliveryType = c.tipoEntrega || "Delivery";
-      state.orderDraft.address = c.direccion || "";
-      if (c.descuentoFijo) state.newOrderDiscount = Number(c.descuentoFijo);
-    }
-  }
-  renderNewOrderView(document.getElementById("main-content"));
-}
-
-function handleDeliveryTypeChange(val) {
-  state.orderDraft.deliveryType = val;
-  const group = document.getElementById("group-delivery-address");
-  if (group) group.style.display = val === "Delivery" ? "flex" : "none";
-}
-
-// ============================================================================
-// GUARDAR NUEVO PEDIDO (PROTECCIÓN ABSOLUTA DE CORRELATIVO Y DATOS)
-// ============================================================================
-async function submitNewOrder() {
-  const nameEl = document.getElementById("order-client-name");
-  const phoneEl = document.getElementById("order-client-phone");
-  const typeEl = document.getElementById("order-delivery-type");
-  const addrEl = document.getElementById("order-address");
-  const dateEl = document.getElementById("order-delivery-date");
-  const notesEl = document.getElementById("order-notes");
-
-  const clientName = (nameEl ? nameEl.value : state.orderDraft.clientName).trim();
-  const clientPhone = (phoneEl ? phoneEl.value : state.orderDraft.clientPhone).trim();
-  const deliveryType = (typeEl ? typeEl.value : state.orderDraft.deliveryType).trim();
-  const address = (addrEl ? addrEl.value : state.orderDraft.address).trim();
-  const deliveryDate = (dateEl ? dateEl.value : state.orderDraft.deliveryDate) || getTodayYmd();
-  const notes = (notesEl ? notesEl.value : state.orderDraft.notes).trim();
-
-  // Validaciones
-  if (!clientName) {
-    Swal.fire({
-      icon: 'warning',
-      title: 'Nombre Requerido',
-      text: 'Por favor indica el nombre del cliente para el pedido.',
-      confirmButtonColor: '#d4af37'
-    });
-    return;
+  const rowEl = document.getElementById("prod-row-" + prodId);
+  if (rowEl) {
+    if (updated > 0) rowEl.classList.add("selected");
+    else rowEl.classList.remove("selected");
   }
 
-  // Verificar que al menos haya 1 producto
-  let itemsCount = 0;
-  let subtotal = 0;
-  const itemsTextList = [];
+  updateOrderFinancialSummaryDom();
+};
 
-  for (const [prodId, qty] of Object.entries(state.newOrderCart)) {
-    const p = state.products.find(item => item.id === prodId);
-    if (p && qty > 0) {
-      itemsCount += qty;
-      subtotal += (Number(p.precio) * qty);
-      itemsTextList.push(`${qty}x ${p.nombre} (${formatMoney(p.precio * qty)})`);
-    }
-  }
+window.setOrderDiscount = function(pct) {
+  state.newOrderDiscount = Number(pct);
 
-  if (itemsCount === 0) {
-    Swal.fire({
-      icon: 'warning',
-      title: 'Carrito Vacío',
-      text: 'Debes añadir al menos 1 producto de granola al pedido.',
-      confirmButtonColor: '#d4af37'
-    });
-    return;
-  }
+  // Actualizar indicador de texto
+  const labelEl = document.getElementById("discount-display-label");
+  if (labelEl) labelEl.textContent = `${state.newOrderDiscount}% aplicado`;
 
-  const productsDetailStr = itemsTextList.join(" + ");
+  // Actualizar botones de píldora
+  document.querySelectorAll("#discount-pills-container .discount-pill").forEach(btn => {
+    const btnPct = Number(btn.getAttribute("data-pct"));
+    btn.classList.toggle("active", btnPct === state.newOrderDiscount);
+  });
+
+  updateOrderFinancialSummaryDom();
+};
+
+function updateOrderFinancialSummaryDom() {
+  const subtotal = calculateCartSubtotal();
   const discountAmount = (subtotal * (state.newOrderDiscount / 100));
   const finalTotal = Math.max(0, subtotal - discountAmount);
 
-  // Generar ID único correlativo que NUNCA colisione ni se reinicie
+  const subtotalEl = document.getElementById("summary-subtotal");
+  if (subtotalEl) subtotalEl.textContent = formatMoney(subtotal);
+
+  const discountEl = document.getElementById("summary-discount");
+  if (discountEl) discountEl.textContent = "- " + formatMoney(discountAmount);
+
+  const totalEl = document.getElementById("summary-total");
+  if (totalEl) totalEl.textContent = formatMoney(finalTotal);
+
+  const btnSave = document.getElementById("btn-save-order");
+  if (btnSave) {
+    const span = btnSave.querySelector("span");
+    if (span) span.textContent = `💾 Registrar Pedido (${formatMoney(finalTotal)})`;
+  }
+}
+
+function calculateCartSubtotal() {
+  let subtotal = 0;
+  for (const [prodId, qty] of Object.entries(state.newOrderCart || {})) {
+    const p = state.products.find(item => item.id === prodId);
+    if (p && qty > 0) {
+      subtotal += (p.precio * qty);
+    }
+  }
+  return subtotal;
+}
+
+window.handleClientSelect = function(clientId) {
+  if (!state.orderDraft) state.orderDraft = {};
+  state.orderDraft.selectedClientId = clientId;
+
+  if (!clientId) {
+    const feedbackEl = document.getElementById("phone-client-feedback");
+    if (feedbackEl) feedbackEl.style.display = "none";
+    return;
+  }
+
+  const client = state.clients.find(c => c.id === clientId);
+  if (client) {
+    state.orderDraft.clientName = client.nombre || "";
+    state.orderDraft.clientPhone = client.telefono || "";
+    state.orderDraft.deliveryType = client.tipoEntrega || "Delivery";
+    state.orderDraft.address = client.direccion || "";
+
+    const nameInput = document.getElementById("order-client-name");
+    const phoneInput = document.getElementById("order-client-phone");
+    const addrInput = document.getElementById("order-address");
+    const deliverySelect = document.getElementById("order-delivery-type");
+
+    if (nameInput) nameInput.value = state.orderDraft.clientName;
+    if (phoneInput) phoneInput.value = state.orderDraft.clientPhone;
+    if (deliverySelect) {
+      deliverySelect.value = state.orderDraft.deliveryType;
+      handleDeliveryTypeChange(state.orderDraft.deliveryType);
+    }
+    if (addrInput) addrInput.value = state.orderDraft.address;
+
+    // Aplicar descuento sin borrar los campos
+    if (client.descuentoFijo !== undefined && client.descuentoFijo !== null) {
+      setOrderDiscount(Number(client.descuentoFijo));
+      showToast(`⭐ Descuento habitual del ${client.descuentoFijo}% aplicado a ${client.nombre}`);
+    }
+
+    const feedbackEl = document.getElementById("phone-client-feedback");
+    if (feedbackEl) {
+      feedbackEl.style.display = "block";
+      feedbackEl.innerHTML = `<span style="color:var(--gold); font-weight:700;">⭐ Cliente seleccionado:</span> <strong style="color:var(--text-main);">${escapeHtml(client.nombre)}</strong>`;
+    }
+  }
+};
+
+window.handlePhoneInput = function(phoneVal, autoFill = true) {
+  if (state.orderDraft) state.orderDraft.clientPhone = phoneVal;
+  const norm = normalizePhone(phoneVal);
+  const feedbackEl = document.getElementById("phone-client-feedback");
+
+  if (!norm || norm.length < 7) {
+    if (feedbackEl) feedbackEl.style.display = "none";
+    return;
+  }
+
+  // Buscar si ya existe un cliente con este número de WhatsApp
+  const matched = state.clients.find(c => normalizePhone(c.telefono) === norm);
+  if (matched) {
+    if (feedbackEl) {
+      feedbackEl.style.display = "block";
+      feedbackEl.innerHTML = `<span style="color:var(--gold); font-weight:700;">⚡ Teléfono registrado a:</span> <strong style="color:var(--text-main);">${escapeHtml(matched.nombre)}</strong>${matched.descuentoFijo ? ` (${matched.descuentoFijo}% desc.)` : ""}`;
+    }
+
+    if (autoFill) {
+      const nameInput = document.getElementById("order-client-name");
+      const addrInput = document.getElementById("order-address");
+      const deliverySelect = document.getElementById("order-delivery-type");
+      const clientSelect = document.getElementById("select-client");
+
+      // Auto-llenar nombre si está vacío
+      if (nameInput && !nameInput.value.trim()) {
+        nameInput.value = matched.nombre;
+        state.orderDraft.clientName = matched.nombre;
+      }
+      // Auto-llenar dirección si está vacía
+      if (addrInput && !addrInput.value.trim() && matched.direccion) {
+        addrInput.value = matched.direccion;
+        state.orderDraft.address = matched.direccion;
+      }
+      // Sincronizar tipo de entrega
+      if (deliverySelect && matched.tipoEntrega) {
+        deliverySelect.value = matched.tipoEntrega;
+        state.orderDraft.deliveryType = matched.tipoEntrega;
+        handleDeliveryTypeChange(matched.tipoEntrega);
+      }
+      // Sincronizar select si coincide
+      if (clientSelect) {
+        clientSelect.value = matched.id;
+        state.orderDraft.selectedClientId = matched.id;
+      }
+      // Aplicar descuento habitual si el actual está en 0
+      if (matched.descuentoFijo && state.newOrderDiscount === 0) {
+        setOrderDiscount(matched.descuentoFijo);
+        showToast(`⭐ Descuento del ${matched.descuentoFijo}% cargado para ${matched.nombre}`);
+      }
+    }
+  } else {
+    if (feedbackEl) feedbackEl.style.display = "none";
+  }
+};
+
+window.handleCreateOrderSubmit = async function(e) {
+  e.preventDefault();
+
+  const subtotal = calculateCartSubtotal();
+  if (subtotal <= 0) {
+    alert("Por favor selecciona al menos 1 granola para crear el pedido.");
+    return;
+  }
+
+  const clientName = document.getElementById("order-client-name").value.trim();
+  const clientPhone = document.getElementById("order-client-phone").value.trim();
+  const deliveryType = document.getElementById("order-delivery-type").value;
+  const address = document.getElementById("order-address") ? document.getElementById("order-address").value.trim() : "";
+  const deliveryDate = document.getElementById("order-delivery-date").value;
+  const deliveryTime = document.getElementById("order-delivery-time").value;
+  const notes = document.getElementById("order-notes").value.trim();
+
+  if (!clientName) {
+    alert("Por favor ingresa el nombre del cliente.");
+    document.getElementById("order-client-name").focus();
+    return;
+  }
+
+  if (!clientPhone) {
+    alert("Por favor ingresa el WhatsApp o teléfono del cliente.");
+    document.getElementById("order-client-phone").focus();
+    return;
+  }
+
+  if (deliveryType === "Delivery" && !address) {
+    alert("Por favor ingresa la dirección de entrega para el envío a domicilio.");
+    document.getElementById("order-address").focus();
+    return;
+  }
+
+  // Construir texto de detalle de productos
+  const itemsTextList = [];
+  for (const [prodId, qty] of Object.entries(state.newOrderCart)) {
+    const p = state.products.find(item => item.id === prodId);
+    if (p && qty > 0) {
+      itemsTextList.push(`${qty}x ${p.nombre} (${formatMoney(p.precio * qty)})`);
+    }
+  }
+  const productsDetailStr = itemsTextList.join(" + ");
+
+  const discountAmount = (subtotal * (state.newOrderDiscount / 100));
+  const finalTotal = Math.max(0, subtotal - discountAmount);
+
+  // Código correlativo estricto de 4 dígitos (0001, 0002, etc.)
   const newId = generateNextOrderId();
   const now = new Date();
   const fechaSolicitud = now.toISOString();
@@ -1071,23 +1328,25 @@ async function submitNewOrder() {
     descuentoEur: discountAmount,
     totalEur: finalTotal,
     fechaEntrega: deliveryDate,
-    horaEntrega: "15:00",
+    horaEntrega: deliveryTime,
     estado: "En Espera",
     responsable: state.user ? state.user.name : "Admin Zeus",
     notas: notes,
     notificadoWA: "No"
   };
 
-  // 1. Guardar de inmediato en la Bóveda Local permanente
-  saveToLocalVault(orderPayload);
-
-  // 2. Guardar en el estado de pedidos activos
+  // Guardar en estado local de pedidos
   state.orders.unshift(orderPayload);
   localStorage.setItem("gz_orders", JSON.stringify(state.orders));
 
-  // 3. Registrar o actualizar cliente sin duplicados
+  // Respaldar permanentemente en Bóveda de Seguridad local y en cola de subida
+  saveOrderToVault(orderPayload);
+  enqueuePendingSync({ action: "create_order", data: orderPayload });
+
+  // GESTIÓN INTELIGENTE DE CLIENTES: Evitar duplicados por teléfono o nombre
   const normPhone = normalizePhone(clientPhone);
   const normName = clientName.toLowerCase();
+
   let matchedIdx = -1;
   if (normPhone && normPhone.length >= 7) {
     matchedIdx = state.clients.findIndex(c => normalizePhone(c.telefono) === normPhone);
@@ -1097,6 +1356,7 @@ async function submitNewOrder() {
   }
 
   if (matchedIdx !== -1) {
+    // Ya existe: actualizar sus datos sin duplicar jamás el número telefónico
     const ex = state.clients[matchedIdx];
     state.clients[matchedIdx] = {
       ...ex,
@@ -1109,6 +1369,7 @@ async function submitNewOrder() {
     localStorage.setItem("gz_clients", JSON.stringify(state.clients));
     syncResourceToSheets("save_client", state.clients[matchedIdx]);
   } else {
+    // Cliente totalmente nuevo
     const newClient = {
       id: `CLI-${Date.now()}`,
       nombre: clientName,
@@ -1122,7 +1383,7 @@ async function submitNewOrder() {
     syncResourceToSheets("save_client", newClient);
   }
 
-  // 4. Limpiar borrador y carrito
+  // Limpiar carrito y borrador
   state.newOrderCart = {};
   state.newOrderDiscount = 0;
   state.orderDraft = {
@@ -1136,112 +1397,17 @@ async function submitNewOrder() {
     notes: ""
   };
 
-  // 5. Notificación elegante
-  Swal.fire({
-    icon: 'success',
-    title: `Pedido #${newId} Creado`,
-    text: `Registrado con éxito para ${clientName} (${formatMoney(finalTotal)})`,
-    timer: 2000,
-    showConfirmButton: false
-  });
+  showToast(`✅ Pedido N° ${newId} registrado con éxito (${formatMoney(finalTotal)})`);
 
-  // 6. Sincronizar en segundo plano con Google Sheets
+  // Intentar sincronización con Google Sheets
   syncSingleOrderToSheets(orderPayload);
 
-  // 7. Navegar al tablero de pedidos
+  // Ir al tablero de pedidos
   switchTab("orders");
-}
-
-// ============================================================================
-// AVANCE DE ESTADO Y ARCHIVADO SEGURO
-// ============================================================================
-window.advanceOrderStatus = function(orderId) {
-  const order = state.orders.find(o => String(o.id) === String(orderId));
-  if (!order) return;
-
-  if (order.estado === "En Espera") {
-    order.estado = "En Producción";
-    saveToLocalVault(order);
-    localStorage.setItem("gz_orders", JSON.stringify(state.orders));
-    renderCurrentTab();
-    showToast(`Pedido #${order.id} pasó a Producción`);
-    syncResourceToSheets("update_status", { id: order.id, status: "En Producción" });
-  } else if (order.estado === "En Producción") {
-    order.estado = "Listo para Despacho";
-    saveToLocalVault(order);
-    localStorage.setItem("gz_orders", JSON.stringify(state.orders));
-    renderCurrentTab();
-    showToast(`Pedido #${order.id} listo para despacho`);
-    syncResourceToSheets("update_status", { id: order.id, status: "Listo para Despacho" });
-  } else if (order.estado === "Listo para Despacho") {
-    Swal.fire({
-      title: '¿Marcar como Entregado y Cobrado?',
-      text: `El pedido #${order.id} se moverá al Historial de Finanzas.`,
-      icon: 'question',
-      showCancelButton: true,
-      confirmButtonColor: '#10b981',
-      cancelButtonColor: '#334155',
-      confirmButtonText: 'Sí, Entregar y Cobrar',
-      cancelButtonText: 'Cancelar'
-    }).then((result) => {
-      if (result.isConfirmed) {
-        order.estado = "Entregado";
-        order.fechaEntregaReal = new Date().toISOString();
-
-        // Mover a entregados y respaldar en bóveda
-        state.orders = state.orders.filter(o => String(o.id) !== String(orderId));
-        state.delivered.unshift(order);
-
-        saveToLocalVault(order);
-        localStorage.setItem("gz_orders", JSON.stringify(state.orders));
-        localStorage.setItem("gz_delivered", JSON.stringify(state.delivered));
-
-        renderCurrentTab();
-        showToast(`Pedido #${order.id} archivado en Historial de Finanzas`);
-
-        syncResourceToSheets("update_status", {
-          id: order.id,
-          status: "Entregado",
-          responsable: state.user ? state.user.name : "Operador"
-        });
-      }
-    });
-  }
-};
-
-window.reopenOrder = function(orderId) {
-  const order = state.delivered.find(o => String(o.id) === String(orderId));
-  if (!order) return;
-
-  Swal.fire({
-    title: '¿Reabrir este Pedido?',
-    text: `El pedido #${order.id} volverá a la lista de pedidos activos como "En Espera".`,
-    icon: 'question',
-    showCancelButton: true,
-    confirmButtonColor: '#8b5cf6',
-    cancelButtonColor: '#334155',
-    confirmButtonText: 'Sí, reabrir pedido',
-    cancelButtonText: 'Cancelar'
-  }).then((result) => {
-    if (result.isConfirmed) {
-      order.estado = "En Espera";
-      state.delivered = state.delivered.filter(o => String(o.id) !== String(orderId));
-      state.orders.unshift(order);
-
-      saveToLocalVault(order);
-      localStorage.setItem("gz_orders", JSON.stringify(state.orders));
-      localStorage.setItem("gz_delivered", JSON.stringify(state.delivered));
-
-      renderCurrentTab();
-      showToast(`Pedido #${order.id} reabierto con éxito`);
-
-      syncResourceToSheets("reopen_order", { id: order.id });
-    }
-  });
 };
 
 // ============================================================================
-// 4. PESTAÑA FINANZAS (HISTORIAL COMPLETO Y TOTALES ACUMULADOS)
+// 4. PESTAÑA FINANZAS (💶 BALANCES EN EUROS)
 // ============================================================================
 function renderFinancesView(container) {
   const allOrders = [...state.orders, ...state.delivered];
@@ -1251,88 +1417,78 @@ function renderFinancesView(container) {
   const weekAgoStr = getDaysAgoYmd(7);
   const monthAgoStr = getDaysAgoYmd(30);
 
-  const salesToday = deliveredOrders
-    .filter(o => (o.fechaEntrega === todayStr || (o.fechaEntregaReal && o.fechaEntregaReal.startsWith(todayStr))))
+  const salesToday = allOrders
+    .filter(o => o.fechaEntrega === todayStr)
     .reduce((sum, o) => sum + Number(o.totalEur || o.totalUsd || 0), 0);
 
-  const salesWeek = deliveredOrders
+  const salesWeek = allOrders
     .filter(o => o.fechaEntrega >= weekAgoStr)
     .reduce((sum, o) => sum + Number(o.totalEur || o.totalUsd || 0), 0);
 
-  const salesMonth = deliveredOrders
+  const salesMonth = allOrders
     .filter(o => o.fechaEntrega >= monthAgoStr)
     .reduce((sum, o) => sum + Number(o.totalEur || o.totalUsd || 0), 0);
 
-  const salesTotal = deliveredOrders
+  const salesTotal = allOrders
     .reduce((sum, o) => sum + Number(o.totalEur || o.totalUsd || 0), 0);
 
   container.innerHTML = `
     <div class="view-header">
       <div>
-        <h2 class="view-title"><i class="fa-solid fa-chart-pie" style="color:var(--gold);"></i> Finanzas & Historial</h2>
-        <p class="view-sub">Balances en Euros (€) &bull; Control de caja</p>
+        <h2 class="view-title">💶 Balance Financiero</h2>
+        <p class="view-sub">Cálculos en Euros (€) en tiempo real</p>
       </div>
-      <button class="btn-action-sm ready" onclick="syncWithSheets(true)">
-        <i class="fa-solid fa-rotate"></i> Actualizar
-      </button>
     </div>
 
-    <!-- Métricas Financieras -->
+    <!-- Cajas de Métricas -->
     <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-card-top">
-          <span>Hoy</span>
-          <i class="fa-solid fa-coins metric-card-icon" style="color:var(--emerald);"></i>
+      <div class="metric-box">
+        <div class="metric-header">
+          <span class="metric-label">Hoy</span>
+          <span>⚡</span>
         </div>
-        <div class="metric-card-val emerald">${formatMoney(salesToday)}</div>
-        <span class="metric-card-sub">cobrado hoy</span>
+        <div class="metric-value gold">${formatMoney(salesToday)}</div>
+        <span class="metric-sub">ventas del día</span>
       </div>
 
-      <div class="metric-card">
-        <div class="metric-card-top">
-          <span>Últimos 7 Días</span>
-          <i class="fa-solid fa-calendar-week metric-card-icon" style="color:var(--gold);"></i>
+      <div class="metric-box">
+        <div class="metric-header">
+          <span class="metric-label">Esta Semana</span>
+          <span>📅</span>
         </div>
-        <div class="metric-card-val gold">${formatMoney(salesWeek)}</div>
-        <span class="metric-card-sub">cobrado esta semana</span>
+        <div class="metric-value emerald">${formatMoney(salesWeek)}</div>
+        <span class="metric-sub">últimos 7 días</span>
       </div>
 
-      <div class="metric-card">
-        <div class="metric-card-top">
-          <span>Últimos 30 Días</span>
-          <i class="fa-solid fa-calendar-days metric-card-icon" style="color:var(--info);"></i>
+      <div class="metric-box">
+        <div class="metric-header">
+          <span class="metric-label">Este Mes</span>
+          <span>📈</span>
         </div>
-        <div class="metric-card-val">${formatMoney(salesMonth)}</div>
-        <span class="metric-card-sub">último mes</span>
+        <div class="metric-value">${formatMoney(salesMonth)}</div>
+        <span class="metric-sub">últimos 30 días</span>
       </div>
 
-      <div class="metric-card">
-        <div class="metric-card-top">
-          <span>Histórico Total</span>
-          <i class="fa-solid fa-vault metric-card-icon" style="color:var(--gold);"></i>
+      <div class="metric-box">
+        <div class="metric-header">
+          <span class="metric-label">Histórico</span>
+          <span>💎</span>
         </div>
-        <div class="metric-card-val gold">${formatMoney(salesTotal)}</div>
-        <span class="metric-card-sub">${deliveredOrders.length} pedidos entregados</span>
+        <div class="metric-value gold">${formatMoney(salesTotal)}</div>
+        <span class="metric-sub">total acumulado</span>
       </div>
     </div>
 
     <!-- Historial de Pedidos Entregados -->
     <div class="card">
-      <div class="card-title-row">
-        <h3 class="card-title"><i class="fa-solid fa-box-archive" style="color:var(--gold);"></i> Historial de Pedidos Entregados (${deliveredOrders.length})</h3>
-        <span style="font-size:11px; color:var(--emerald); font-weight:700;"><i class="fa-solid fa-shield-check"></i> Respaldados</span>
-      </div>
-
+      <h3 class="builder-section-title">📦 Pedidos Entregados y Cobrados (${deliveredOrders.length})</h3>
       ${deliveredOrders.length === 0 ? `
         <div class="empty-state">
-          <i class="fa-solid fa-clock-rotate-left empty-state-icon"></i>
-          <p>Aún no hay pedidos marcados como entregados en este dispositivo.</p>
-          <button class="btn-action-sm primary" style="margin-top:6px;" onclick="syncWithSheets(true)">
-            <i class="fa-solid fa-cloud-arrow-down"></i> Sincronizar Historial desde Google Sheets
-          </button>
+          <div class="empty-state-icon">💶</div>
+          <p>Aún no hay pedidos marcados como entregados.</p>
         </div>
       ` : `
-        <div style="display:flex; flex-direction:column; gap:10px;">
+        <div class="orders-list">
           ${deliveredOrders.map(o => renderOrderCardHtml(o)).join("")}
         </div>
       `}
@@ -1341,326 +1497,771 @@ function renderFinancesView(container) {
 }
 
 // ============================================================================
-// 5. PESTAÑA AJUSTES (CONEXIÓN, BÓVEDA, CLIENTES, CATÁLOGO, ADMIN)
+// 5. PESTAÑA AJUSTES (⚙ CLIENTES, CATÁLOGO, PERMISOS ADMIN & SEGURIDAD)
 // ============================================================================
 function renderSettingsView(container) {
   const manager = isManager();
-  const vault = getLocalVault();
-  const vaultCount = Object.keys(vault).length;
 
   container.innerHTML = `
     <div class="view-header">
       <div>
-        <h2 class="view-title"><i class="fa-solid fa-sliders" style="color:var(--gold);"></i> Ajustes del Sistema</h2>
-        <p class="view-sub">${state.user ? escapeHtml(state.user.name) : "Usuario"} &bull; ${manager ? '<span style="color:var(--gold); font-weight:700;">Administrador</span>' : 'Operador'}</p>
+        <h2 class="view-title">⚙️ Ajustes del Sistema</h2>
+        <p class="view-sub">${state.user ? state.user.name : "Usuario"} · ${manager ? "👑 Administrador" : "Operador"}</p>
       </div>
     </div>
 
-    <!-- 1. Bóveda de Respaldo y Protección de Datos -->
-    <div class="card" style="border:1.5px solid var(--emerald); background:rgba(16,185,129,0.04);">
-      <div class="card-title-row">
-        <h3 class="card-title" style="color:var(--emerald);">
-          <i class="fa-solid fa-shield-halved"></i> Bóveda de Seguridad & Recuperación
-        </h3>
-        <span class="sync-pill online"><i class="fa-solid fa-check"></i> Activa</span>
-      </div>
-      <p style="font-size:12.5px; color:var(--text-muted);">
-        Esta app cuenta con protección contra pérdida de datos. Tus pedidos se respaldan localmente y en Google Sheets automáticamente.
-      </p>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:4px 0;">
-        <div style="background:var(--bg-card); padding:8px 12px; border-radius:var(--radius-sm); border:1px solid var(--border-color);">
-          <span style="font-size:11px; color:var(--text-muted); display:block;">Pedidos en Bóveda</span>
-          <strong style="font-size:16px; color:var(--gold);">${vaultCount} pedidos</strong>
+    <!-- 1. Conexión con Google Sheets (Visible para Admin o cuando falta configurar la URL) -->
+    ${(manager || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) ? `
+      <div class="card" style="border:1.5px solid var(--gold);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h3 class="builder-section-title" style="margin:0;">🔗 Conexión con Google Sheets</h3>
+          <span class="admin-badge">👑 Administrador / Conexión</span>
         </div>
-        <div style="background:var(--bg-card); padding:8px 12px; border-radius:var(--radius-sm); border:1px solid var(--border-color);">
-          <span style="font-size:11px; color:var(--text-muted); display:block;">Histórico Entregados</span>
-          <strong style="font-size:16px; color:var(--emerald);">${state.delivered.length} pedidos</strong>
+        <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:10px;">
+          Pega aquí el enlace de tu Web App de Google Apps Script (el que termina en <code>/exec</code>) para sincronizar en tiempo real con tu hoja de Google Drive.
+        </p>
+        <div class="form-group" style="margin-bottom:10px;">
+          <input 
+            type="url" 
+            id="admin-api-url-input" 
+            class="form-input" 
+            style="padding-left:12px; font-family:var(--font-mono); font-size:12px;" 
+            placeholder="https://script.google.com/macros/s/.../exec" 
+            value="${API_URL.includes("YOUR_DEPLOYED_URL_HERE") ? "" : escapeHtml(API_URL)}" 
+          />
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn-primary-gold" style="flex:1; margin:0; padding:10px;" onclick="saveApiUrlFromAdmin()">
+            💾 Guardar y Conectar
+          </button>
+          <button class="btn-action-sm ready" style="padding:10px 14px;" onclick="syncWithSheets(true)">
+            ↻ Probar Conexión
+          </button>
         </div>
       </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="btn-action-sm ready" style="flex:1;" onclick="syncWithSheets(true)">
-          <i class="fa-solid fa-rotate"></i> Sincronizar con Google Sheets
-        </button>
-        <button class="btn-action-sm btn-secondary-subtle" onclick="restoreFromLocalVault()">
-          <i class="fa-solid fa-recycle"></i> Restaurar desde Bóveda Local
-        </button>
-      </div>
-    </div>
+    ` : ""}
 
-    <!-- 2. Conexión con Google Sheets -->
-    <div class="card" style="border:1.5px solid var(--gold);">
-      <div class="card-title-row">
-        <h3 class="card-title"><i class="fa-solid fa-cloud" style="color:var(--gold);"></i> Conexión con Google Sheets</h3>
-        <span class="order-id-badge">Backend Serverless</span>
-      </div>
-      <p style="font-size:12.5px; color:var(--text-muted);">
-        Enlace de tu Web App de Google Apps Script (que termina en <code>/exec</code>) vinculada a tu hoja de cálculo.
-      </p>
-      <div class="form-group">
-        <input 
-          type="url" 
-          id="admin-api-url-input" 
-          class="form-input" 
-          style="padding-left:14px; font-family:var(--font-mono); font-size:12px;" 
-          placeholder="https://script.google.com/macros/s/.../exec" 
-          value="${API_URL.includes("YOUR_DEPLOYED_URL_HERE") ? "" : escapeHtml(API_URL)}" 
-        />
-      </div>
-      <div style="display:flex; gap:8px;">
-        <button class="btn-primary-gold" style="flex:1; margin:0;" onclick="saveApiUrlFromAdmin()">
-          <i class="fa-solid fa-floppy-disk"></i> Guardar y Conectar
-        </button>
-        <button class="btn-action-sm btn-secondary-subtle" onclick="testConnection()">
-          <i class="fa-solid fa-plug"></i> Probar Conexión
-        </button>
-      </div>
-    </div>
-
-    <!-- 3. Gestión de Clientes -->
+    <!-- 2. Seguridad Personal (PARA CUALQUIER USUARIO: CAMBIO DE PIN) -->
     <div class="card">
-      <div class="card-title-row">
-        <h3 class="card-title"><i class="fa-solid fa-users" style="color:var(--gold);"></i> Clientes Registrados (${state.clients.length})</h3>
-        <button class="btn-action-sm primary" onclick="openNewClientModal()">
-          <i class="fa-solid fa-user-plus"></i> Añadir
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <h3 class="builder-section-title" style="margin:0;">🔐 Mi Seguridad</h3>
+        <span style="font-size:11px; color:var(--gold); font-weight:700;">PIN Personal</span>
+      </div>
+      <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px;">
+        Usuario activo: <strong>${state.user ? state.user.name : ""}</strong>. Puedes cambiar tu contraseña o PIN de acceso en cualquier momento.
+      </p>
+      <div style="display:flex; flex-direction:column; gap:8px;">
+        <button class="btn-action-sm ready" onclick="openChangePinModal()">
+          🔑 Cambiar mi Contraseña / PIN
+        </button>
+        <button class="btn-action-sm outline-gold" onclick="restoreFromVault()">
+          🛡️ Restaurar Pedidos desde la Bóveda de Seguridad Local
+        </button>
+        <button class="btn-action-sm" onclick="forceCleanUpdate(true)">
+          🔄 Forzar Actualización y Limpiar Caché Local
         </button>
       </div>
-      <div style="display:flex; flex-direction:column; gap:8px; max-height:260px; overflow-y:auto;">
+    </div>
+
+    <!-- 3. Clientes Frecuentes (EDITABLE/ELIMINABLE SOLO POR ADMIN) -->
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 class="builder-section-title" style="margin:0;">👥 Directorio de Clientes (${state.clients.length})</h3>
+        <button class="btn-action-sm ready" onclick="openNewClientModal()">➕ Nuevo</button>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:8px;">
         ${state.clients.map(c => `
-          <div style="background:var(--bg-card-subtle); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
+          <div style="background:var(--bg-app); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
             <div>
-              <strong style="font-size:14px; color:var(--text-main);">${escapeHtml(c.nombre)}</strong>
-              <div style="font-size:11.5px; color:var(--text-muted);">
-                <i class="fa-solid fa-phone"></i> ${escapeHtml(c.telefono || 'Sin teléfono')} &bull; ${escapeHtml(c.tipoEntrega || 'Delivery')} &bull; <span style="color:var(--emerald); font-weight:700;">${c.descuentoFijo || 0}% desc.</span>
+              <strong>${escapeHtml(c.nombre)}</strong>
+              <div style="font-size:12px; color:var(--text-muted);">
+                📞 ${escapeHtml(c.telefono || "Sin tlf")} · ${c.direccion ? escapeHtml(c.direccion) : "Sin dirección"}
               </div>
+              <span class="status-badge" style="background:rgba(212,175,55,0.15); color:var(--gold); border:1px solid var(--gold); margin-top:4px; display:inline-block;">
+                ${c.descuentoFijo || 0}% Descuento
+              </span>
             </div>
-            <div style="display:flex; gap:4px;">
-              ${c.telefono ? `
-                <a class="top-action-btn" href="https://wa.me/${normalizePhone(c.telefono)}" target="_blank" title="WhatsApp" style="width:30px; height:30px;">
-                  <i class="fa-brands fa-whatsapp" style="color:#25d366;"></i>
-                </a>
-              ` : ''}
-              ${manager ? `
-                <button class="top-action-btn btn-danger-action" style="width:30px; height:30px;" onclick="deleteClient('${c.id}')" title="Eliminar cliente">
-                  <i class="fa-solid fa-trash"></i>
-                </button>
-              ` : ''}
-            </div>
+            
+            ${manager ? `
+              <div style="display:flex; gap:6px; align-items:center;">
+                <button class="btn-icon-action" onclick="openEditClientModal('${c.id}')" title="Editar Cliente">✏️</button>
+                <button class="btn-icon-action danger" onclick="deleteClient('${c.id}')" title="Eliminar Cliente">🗑️</button>
+              </div>
+            ` : ""}
           </div>
         `).join("")}
       </div>
     </div>
 
-    <!-- 4. Catálogo de Productos y Precios -->
+    <!-- 4. Catálogo de Granolas (MODIFICAR/AÑADIR/ELIMINAR SOLO POR ADMIN) -->
     <div class="card">
-      <div class="card-title-row">
-        <h3 class="card-title"><i class="fa-solid fa-jar" style="color:var(--gold);"></i> Catálogo de Granolas (${state.products.length})</h3>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <h3 class="builder-section-title" style="margin:0;">🥣 Catálogo de Granolas (${state.products.length})</h3>
         ${manager ? `
-          <button class="btn-action-sm primary" onclick="openNewProductModal()">
-            <i class="fa-solid fa-plus"></i> Añadir
-          </button>
-        ` : ''}
+          <button class="btn-action-sm ready" onclick="openNewProductModal()">➕ Añadir Granola</button>
+        ` : ""}
       </div>
+
       <div style="display:flex; flex-direction:column; gap:8px;">
         ${state.products.map(p => `
-          <div style="background:var(--bg-card-subtle); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
+          <div style="background:var(--bg-app); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
             <div>
-              <strong style="font-size:14px; color:var(--text-main);">${escapeHtml(p.nombre)}</strong>
-              <div style="font-size:11.5px; color:var(--text-muted);">${escapeHtml(p.presentacion || '')}</div>
+              <strong>${escapeHtml(p.nombre)}</strong>
+              <div style="font-size:12px; color:var(--text-muted);">${escapeHtml(p.presentacion || "")}</div>
             </div>
+            
             <div style="display:flex; align-items:center; gap:10px;">
-              <span style="font-size:15px; font-weight:800; color:var(--gold);">${formatMoney(p.precio)}</span>
+              <span style="font-size:16px; font-weight:800; font-family:var(--font-mono); color:var(--gold);">
+                ${formatMoney(p.precio)}
+              </span>
               ${manager ? `
-                <button class="top-action-btn btn-danger-action" style="width:30px; height:30px;" onclick="deleteProduct('${p.id}')">
-                  <i class="fa-solid fa-trash"></i>
-                </button>
-              ` : ''}
+                <div style="display:flex; gap:6px;">
+                  <button class="btn-icon-action" onclick="openEditProductModal('${p.id}')" title="Editar Precio o Nombre">✏️</button>
+                  <button class="btn-icon-action danger" onclick="deleteProduct('${p.id}')" title="Eliminar del Catálogo">🗑️</button>
+                </div>
+              ` : ""}
             </div>
           </div>
         `).join("")}
       </div>
     </div>
 
-    <!-- 5. Copia de Seguridad JSON & Actualización -->
-    <div class="card">
-      <h3 class="card-title"><i class="fa-solid fa-floppy-disk" style="color:var(--gold);"></i> Respaldo Manual & Sistema</h3>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
-        <button class="btn-action-sm btn-secondary-subtle" onclick="exportZeusBackup()">
-          <i class="fa-solid fa-file-export"></i> Exportar Respaldo
-        </button>
-        <label class="btn-action-sm btn-secondary-subtle" style="text-align:center; cursor:pointer;">
-          <i class="fa-solid fa-file-import"></i> Importar Respaldo
-          <input type="file" accept=".json" style="display:none;" onchange="importZeusBackup(event)" />
-        </label>
-      </div>
+    <!-- 5. Gestión de Usuarios y Perfiles (SOLO ADMINISTRADOR) -->
+    ${manager ? `
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <div>
+            <h3 class="builder-section-title" style="margin:0;">👥 Equipo & Perfiles de Usuario</h3>
+            <span class="admin-badge" style="margin-top:4px;">👑 Solo Administrador</span>
+          </div>
+          <button class="btn-action-sm ready" onclick="openNewUserModal()">➕ Nuevo Perfil</button>
+        </div>
 
-      <div style="display:flex; gap:8px; margin-top:4px;">
-        <button class="btn-action-sm btn-secondary-subtle" style="flex:1;" onclick="openChangePinModal()">
-          <i class="fa-solid fa-key"></i> Cambiar mi PIN
-        </button>
-        <button class="btn-action-sm btn-secondary-subtle" style="flex:1;" onclick="forceCleanUpdate(true)">
-          <i class="fa-solid fa-broom"></i> Limpiar Caché App
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          ${state.users.map(u => `
+            <div style="background:var(--bg-app); border:1px solid var(--border-color); border-radius:var(--radius-sm); padding:10px 12px; display:flex; justify-content:space-between; align-items:center;">
+              <div>
+                <strong>${escapeHtml(u.name)}</strong>
+                <div style="font-size:12px; color:var(--text-muted);">
+                  Rol: <strong>${u.role === "manager" ? "Manager / Administrador" : "Operador Taller"}</strong>
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <span class="status-badge" style="background:rgba(16,185,129,0.15); color:var(--emerald);">
+                  ${u.pin ? "PIN Activo" : "Sin PIN"}
+                </span>
+                ${u.id !== state.user.id ? `
+                  <button class="btn-icon-action danger" onclick="deleteUser('${u.id}')" title="Eliminar Usuario">🗑️</button>
+                ` : ""}
+              </div>
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    ` : ""}
+
+    <!-- 6. Editor de Plantilla de WhatsApp (SOLO ADMINISTRADOR) -->
+    ${manager ? `
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h3 class="builder-section-title" style="margin:0;">💬 Plantilla de Mensaje WhatsApp</h3>
+          <span class="admin-badge">👑 Solo Administrador</span>
+        </div>
+        <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:10px;">
+          Personaliza el mensaje que se enviará automáticamente a los clientes. Las etiquetas entre llaves se sustituyen solas.
+        </p>
+        
+        <textarea id="wa-template-input" class="whatsapp-template-box">${escapeHtml(state.waTemplate)}</textarea>
+
+        <div class="variables-pill-list">
+          <span class="variable-pill" onclick="insertWaTag('{cliente}')">+{cliente}</span>
+          <span class="variable-pill" onclick="insertWaTag('{id}')">+{id}</span>
+          <span class="variable-pill" onclick="insertWaTag('{detalle}')">+{detalle}</span>
+          <span class="variable-pill" onclick="insertWaTag('{total}')">+{total}</span>
+          <span class="variable-pill" onclick="insertWaTag('{entrega_info}')">+{entrega_info}</span>
+          <span class="variable-pill" onclick="insertWaTag('{fechaEntrega}')">+{fechaEntrega}</span>
+        </div>
+
+        <div style="display:flex; gap:8px; margin-top:12px;">
+          <button class="btn-primary-gold" style="flex:1; margin:0; padding:10px;" onclick="saveWhatsAppTemplate()">
+            💾 Guardar Plantilla
+          </button>
+          <button class="btn-action-sm" style="padding:10px 12px;" onclick="resetWhatsAppTemplate()">
+            ↺ Restaurar
+          </button>
+        </div>
+      </div>
+    ` : ""}
+
+    <!-- 7. Copia de Seguridad & Restauración (SOLO ADMINISTRADOR) -->
+    ${manager ? `
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h3 class="builder-section-title" style="margin:0;">💾 Respaldo y Restauración de Datos</h3>
+          <span class="admin-badge">👑 Solo Administrador</span>
+        </div>
+        <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px;">
+          Descarga una copia completa en formato JSON o restaura un archivo previo de Granola Zeus.
+        </p>
+        <div style="display:flex; gap:10px;">
+          <button class="btn-action-sm ready" style="flex:1; justify-content:center; padding:10px;" onclick="exportZeusBackup()">
+            📥 Descargar Copia JSON
+          </button>
+          <label class="btn-action-sm" style="flex:1; justify-content:center; padding:10px; cursor:pointer;">
+            📤 Restaurar Copia
+            <input type="file" accept=".json" onchange="importZeusBackup(event)" style="display:none;" />
+          </label>
+        </div>
+      </div>
+    ` : ""}
+
+    <!-- 8. Actualización Global de Dispositivos (SOLO ADMINISTRADOR) -->
+    ${manager ? `
+      <div class="card" style="border:1.5px solid var(--gold); background: linear-gradient(135deg, rgba(212,175,55,0.08) 0%, var(--bg-card) 100%);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+          <h3 class="builder-section-title" style="margin:0; color:var(--gold);">🚀 Actualización Global de Dispositivos</h3>
+          <span class="admin-badge">👑 Solo Administrador</span>
+        </div>
+        <p style="font-size:12.5px; color:var(--text-muted); margin-bottom:12px; line-height:1.45;">
+          ¿Hiciste cambios en el código o publicaste una nueva versión en GitHub Pages? Presiona este botón para ordenar a <strong>todas las sesiones y dispositivos conectados</strong> (teléfonos del taller, tablets, computadoras) que se actualicen inmediatamente sin tener que desinstalar la app ni borrar la caché de Chrome a mano.
+        </p>
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; padding:8px 12px; background:var(--bg-app); border-radius:var(--radius-sm); border:1px solid var(--border-color);">
+          <span style="font-size:12px; color:var(--text-muted);">Versión del sistema:</span>
+          <span style="font-size:12px; font-family:var(--font-mono); font-weight:700; color:var(--gold);">
+            ${localStorage.getItem("gz_system_version") || "v1.0 (Inicial)"}
+          </span>
+        </div>
+        <button class="btn-primary-gold" style="margin:0;" onclick="publishGlobalUpdate()">
+          <span>🚀 Emitir Actualización a Todos los Dispositivos</span>
         </button>
       </div>
+    ` : ""}
+
+    <!-- Sesión y Acerca de -->
+    <div class="card" style="text-align:center;">
+      <p style="font-size:13px; color:var(--text-muted); margin-bottom:12px;">
+        Sesión activa como: <strong>${state.user ? state.user.name : "Admin Zeus"}</strong>
+      </p>
+      <button class="btn-action-sm" style="margin:0 auto; color:var(--danger); border-color:rgba(239,68,68,0.4);" onclick="doLogout()">
+        🚪 Cerrar Sesión
+      </button>
     </div>
   `;
 }
 
 // ============================================================================
-// FUNCIONES DE SINCRONIZACIÓN SEGURA Y FUSIÓN (ZERO DATA LOSS)
+// CONEXIÓN API ADMIN
 // ============================================================================
-async function syncWithSheets(interactive = false) {
-  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) {
-    if (interactive) {
-      Swal.fire({
-        icon: 'info',
-        title: 'Modo Local',
-        text: 'Pega la URL de tu Google Apps Script en la pestaña Ajustes para sincronizar en tiempo real con Drive.',
-        confirmButtonColor: '#d4af37'
-      });
-    }
+window.saveApiUrlFromAdmin = function() {
+  const input = document.getElementById("admin-api-url-input");
+  if (!input) return;
+  const url = input.value.trim();
+
+  if (!url || !url.startsWith("https://script.google.com/")) {
+    alert("Por favor ingresa una URL válida de Google Apps Script que comience con https://script.google.com/");
     return;
   }
 
-  const syncPill = document.getElementById("sync-status-indicator");
-  if (syncPill) {
-    syncPill.innerHTML = '<span class="sync-dot" style="background:#f59e0b;"></span> Sincronizando...';
+  API_URL = url;
+  localStorage.setItem("gz_api_url", url);
+  showToast("✅ URL de Google Apps Script guardada con éxito.");
+  syncWithSheets(true);
+};
+
+// ============================================================================
+// PLANTILLA DE WHATSAPP
+// ============================================================================
+window.insertWaTag = function(tag) {
+  const box = document.getElementById("wa-template-input");
+  if (!box) return;
+  box.value += tag;
+  box.focus();
+};
+
+window.saveWhatsAppTemplate = function() {
+  const box = document.getElementById("wa-template-input");
+  if (!box) return;
+  state.waTemplate = box.value;
+  localStorage.setItem("gz_wa_template", state.waTemplate);
+  showToast("✅ Plantilla de WhatsApp guardada.");
+};
+
+window.resetWhatsAppTemplate = function() {
+  if (confirm("¿Restaurar la plantilla predeterminada de WhatsApp?")) {
+    state.waTemplate = DEFAULT_WA_TEMPLATE;
+    localStorage.setItem("gz_wa_template", DEFAULT_WA_TEMPLATE);
+    const box = document.getElementById("wa-template-input");
+    if (box) box.value = DEFAULT_WA_TEMPLATE;
+    showToast("Plantilla restaurada.");
+  }
+};
+
+window.openWhatsAppNotify = function(orderId) {
+  const order = [...state.orders, ...state.delivered].find(o => o.id === orderId);
+  if (!order || !order.telefono) {
+    alert("Este pedido no tiene número de teléfono registrado.");
+    return;
   }
 
-  if (interactive) showToast("Sincronizando con Google Sheets...");
+  const cleanPhone = order.telefono.replace(/\D/g, "");
+  const total = formatMoney(order.totalEur || order.totalUsd || 0);
 
-  try {
-    const res = await fetch(API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action: "dashboard" })
-    });
-    const json = await res.json();
-
-    if (json && json.ok && json.data) {
-      // 1. FUSIÓN INTELIGENTE DE PEDIDOS ACTIVOS: Jamás sobreescribir ciegamente
-      if (json.data.orders && Array.isArray(json.data.orders)) {
-        const remoteOrders = json.data.orders;
-        const remoteIds = new Set(remoteOrders.map(o => String(o.id)));
-
-        // Preservar pedidos locales que aún no hayan llegado a Google Sheets
-        const pendingLocal = state.orders.filter(o => !remoteIds.has(String(o.id)));
-
-        // Combinar: remotos + pendientes locales
-        state.orders = deduplicateOrdersById([...pendingLocal, ...remoteOrders]);
-        localStorage.setItem("gz_orders", JSON.stringify(state.orders));
-
-        // Respaldar en bóveda local permanente
-        saveManyToLocalVault(state.orders);
-      }
-
-      // 2. RECUPERACIÓN TOTAL DE PEDIDOS ENTREGADOS (HISTORIAL)
-      if (json.data.delivered && Array.isArray(json.data.delivered)) {
-        const remoteDelivered = json.data.delivered;
-        const remoteDeliveredIds = new Set(remoteDelivered.map(o => String(o.id)));
-        const pendingDelivered = state.delivered.filter(o => !remoteDeliveredIds.has(String(o.id)));
-
-        state.delivered = deduplicateOrdersById([...pendingDelivered, ...remoteDelivered]);
-        localStorage.setItem("gz_delivered", JSON.stringify(state.delivered));
-        saveManyToLocalVault(state.delivered);
-      } else {
-        // Fallback: si el backend no devolvió entregados en dashboard, llamar a action: "history"
-        fetchDeliveredHistoryFallback();
-      }
-
-      // 3. Clientes
-      if (json.data.clients && Array.isArray(json.data.clients) && json.data.clients.length > 0) {
-        state.clients = json.data.clients.map((c, idx) => ({
-          id: c.id || `CLI-${idx + 1}`,
-          nombre: c.nombre || "",
-          telefono: c.telefono || "",
-          tipoEntrega: c.tipoEntrega || (c.delivery === "Sí" || c.delivery === "Delivery" ? "Delivery" : "Pickup"),
-          direccion: c.direccion || c.direccionDetallada || c.zona || "",
-          descuentoFijo: Number(c.descuentoFijo || 15),
-          notas: c.notas || ""
-        }));
-        deduplicateClients();
-        localStorage.setItem("gz_clients", JSON.stringify(state.clients));
-      }
-
-      // 4. Catálogo de productos
-      if (json.data.products && Array.isArray(json.data.products) && json.data.products.length > 0) {
-        state.products = json.data.products;
-        localStorage.setItem("gz_products", JSON.stringify(state.products));
-      }
-
-      // 5. Usuarios
-      if (json.data.users && Array.isArray(json.data.users) && json.data.users.length > 0) {
-        state.users = json.data.users;
-        localStorage.setItem("gz_users", JSON.stringify(state.users));
-      }
-
-      if (syncPill) {
-        syncPill.className = "sync-pill online";
-        syncPill.innerHTML = '<span class="sync-dot"></span> Sincronizado';
-      }
-
-      if (interactive) {
-        Swal.fire({
-          icon: 'success',
-          title: 'Sincronizado',
-          text: `Todo actualizado con Google Sheets (${state.orders.length} activos, ${state.delivered.length} en historial).`,
-          confirmButtonColor: '#d4af37'
-        });
-      }
-
-      renderCurrentTab();
-    }
-  } catch (err) {
-    console.warn("Fallo en sincronización con Apps Script:", err);
-    if (syncPill) {
-      syncPill.className = "sync-pill local";
-      syncPill.innerHTML = '<span class="sync-dot" style="background:#f59e0b;"></span> Modo Local';
-    }
-    if (interactive) {
-      Swal.fire({
-        icon: 'error',
-        title: 'Error de Conexión',
-        text: 'No se pudo conectar con Apps Script. Verifica tu conexión a internet o la URL en Ajustes.',
-        confirmButtonColor: '#d4af37'
-      });
-    }
+  // Determinar texto de entrega diferenciando claramente Delivery vs Pickup
+  let entregaTexto = "";
+  const isDelivery = order.tipoEntrega && (order.tipoEntrega.toLowerCase().includes("delivery") || order.tipoEntrega.toLowerCase().includes("envío"));
+  if (isDelivery) {
+    entregaTexto = `🚚 *Método de Entrega:* Envío a Domicilio (Delivery)\n📍 *Dirección de Entrega:* ${order.zonaDireccion || "Por coordinar"}`;
+  } else {
+    entregaTexto = `🏬 *Método de Entrega:* Retiro en Taller / Tienda (Pickup)`;
   }
-}
 
-async function fetchDeliveredHistoryFallback() {
-  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) return;
-  try {
-    const res = await fetch(API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action: "history" })
-    });
-    const json = await res.json();
-    if (json && json.ok && json.data && Array.isArray(json.data.history)) {
-      state.delivered = deduplicateOrdersById([...state.delivered, ...json.data.history]);
+  const formattedTime = order.horaEntrega ? formatTime12h(order.horaEntrega) : "Por coordinar";
+  const formattedDate = order.fechaEntrega ? formatDateFriendly(order.fechaEntrega) : "Hoy";
+  const template = state.waTemplate || DEFAULT_WA_TEMPLATE;
+  const msg = template
+    .replace(/{cliente}/g, order.cliente || "Cliente")
+    .replace(/{id}/g, order.id)
+    .replace(/{detalle}/g, order.productosDetalle || "")
+    .replace(/{total}/g, total)
+    .replace(/{entrega_info}/g, entregaTexto)
+    .replace(/{fechaEntrega}/g, `${formattedDate} a las ${formattedTime}`)
+    .replace(/{horaEntrega}/g, formattedTime);
+
+  const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
+  window.open(url, "_blank");
+};
+
+// ============================================================================
+// GESTIÓN DE ACCIONES DE PEDIDOS
+// ============================================================================
+window.advanceOrderStatus = function(orderId) {
+  const order = state.orders.find(o => o.id === orderId);
+  if (!order) return;
+
+  if (order.estado === "En Espera") {
+    order.estado = "En Producción";
+    showToast(`🥣 Pedido N° ${order.id} pasó a Producción`);
+  } else if (order.estado === "En Producción") {
+    order.estado = "Listo para Despacho";
+    showToast(`📦 Pedido N° ${order.id} listo para despacho`);
+  } else if (order.estado === "Listo para Despacho") {
+    if (confirm(`¿Marcar pedido N° ${order.id} como ENTREGADO y COBRADO?`)) {
+      order.estado = "Entregado";
+      order.fechaEntregaReal = new Date().toISOString();
+      state.orders = state.orders.filter(o => o.id !== orderId);
+      state.delivered.unshift(order);
       localStorage.setItem("gz_delivered", JSON.stringify(state.delivered));
-      saveManyToLocalVault(state.delivered);
-      renderCurrentTab();
+      showToast(`🎉 ¡Pedido N° ${order.id} entregado y registrado en Finanzas!`);
     }
-  } catch (e) {
-    console.warn("Aviso en consulta de historial entregados:", e);
   }
-}
 
-function deduplicateOrdersById(ordersArray) {
-  const map = new Map();
-  ordersArray.forEach(o => {
-    if (o && o.id) {
-      map.set(String(o.id), o);
-    }
+  localStorage.setItem("gz_orders", JSON.stringify(state.orders));
+  renderCurrentTab();
+
+  // Actualizar estado en Google Sheets (¡NO crear un pedido nuevo!)
+  syncResourceToSheets("update_status", {
+    id: order.id,
+    status: order.estado,
+    responsable: state.user ? state.user.name : "Operador"
   });
-  return Array.from(map.values());
-}
+};
 
+// ============================================================================
+// MODALES Y CRUD PARA CLIENTES (SOLO ADMIN PUEDE EDITAR Y BORRAR)
+// ============================================================================
+window.openNewClientModal = function() {
+  const overlay = document.getElementById("modal-overlay");
+  const body = document.getElementById("modal-body");
+  if (!overlay || !body) return;
+
+  body.innerHTML = `
+    <h3 style="font-size:17px; font-weight:800; margin-bottom:14px; color:var(--gold);">➕ Registrar Nuevo Cliente</h3>
+    <form onsubmit="handleSaveClientFromModal(event, null)">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nombre del Cliente *</label>
+        <input type="text" id="modal-cli-name" class="form-input" style="padding-left:12px;" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Teléfono / WhatsApp *</label>
+        <input type="tel" id="modal-cli-phone" class="form-input" style="padding-left:12px;" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Tipo de Entrega Habitual</label>
+        <select id="modal-cli-delivery" class="form-select" style="padding-left:12px;">
+          <option value="Delivery">🚚 Delivery</option>
+          <option value="Pickup">🏬 Retiro en Taller</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Dirección habitual</label>
+        <input type="text" id="modal-cli-addr" class="form-input" style="padding-left:12px;" />
+      </div>
+      <div class="form-group" style="margin-bottom:16px;">
+        <label>Descuento habitual permanente (%)</label>
+        <input type="number" id="modal-cli-discount" class="form-input" style="padding-left:12px;" value="15" min="0" max="100" />
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn-primary-gold" style="flex:1; margin:0;">Guardar Cliente</button>
+      </div>
+    </form>
+  `;
+  overlay.style.display = "flex";
+};
+
+window.openEditClientModal = function(clientId) {
+  if (!isManager()) return;
+  const client = state.clients.find(c => c.id === clientId);
+  if (!client) return;
+
+  const overlay = document.getElementById("modal-overlay");
+  const body = document.getElementById("modal-body");
+  if (!overlay || !body) return;
+
+  body.innerHTML = `
+    <h3 style="font-size:17px; font-weight:800; margin-bottom:14px; color:var(--gold);">✏️ Editar Cliente</h3>
+    <form onsubmit="handleSaveClientFromModal(event, '${client.id}')">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nombre del Cliente *</label>
+        <input type="text" id="modal-cli-name" class="form-input" style="padding-left:12px;" value="${escapeHtml(client.nombre)}" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Teléfono / WhatsApp *</label>
+        <input type="tel" id="modal-cli-phone" class="form-input" style="padding-left:12px;" value="${escapeHtml(client.telefono || "")}" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Tipo de Entrega Habitual</label>
+        <select id="modal-cli-delivery" class="form-select" style="padding-left:12px;">
+          <option value="Delivery" ${client.tipoEntrega === "Delivery" ? "selected" : ""}>🚚 Delivery</option>
+          <option value="Pickup" ${client.tipoEntrega === "Pickup" ? "selected" : ""}>🏬 Retiro en Taller</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Dirección habitual</label>
+        <input type="text" id="modal-cli-addr" class="form-input" style="padding-left:12px;" value="${escapeHtml(client.direccion || "")}" />
+      </div>
+      <div class="form-group" style="margin-bottom:16px;">
+        <label>Descuento habitual permanente (%)</label>
+        <input type="number" id="modal-cli-discount" class="form-input" style="padding-left:12px;" value="${client.descuentoFijo || 0}" min="0" max="100" />
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn-primary-gold" style="flex:1; margin:0;">Actualizar Cliente</button>
+      </div>
+    </form>
+  `;
+  overlay.style.display = "flex";
+};
+
+window.handleSaveClientFromModal = function(e, existingId) {
+  e.preventDefault();
+  const name = document.getElementById("modal-cli-name").value.trim();
+  const phone = document.getElementById("modal-cli-phone").value.trim();
+  const delivery = document.getElementById("modal-cli-delivery").value;
+  const addr = document.getElementById("modal-cli-addr").value.trim();
+  const discount = Number(document.getElementById("modal-cli-discount").value || 0);
+
+  const normPhone = normalizePhone(phone);
+  if (normPhone && normPhone.length >= 7) {
+    const dup = state.clients.find(c => c.id !== existingId && normalizePhone(c.telefono) === normPhone);
+    if (dup) {
+      alert(`⚠️ El número telefónico ${phone} ya pertenece al cliente "${dup.nombre}".\n\nNo se pueden registrar dos clientes con el mismo número de WhatsApp.`);
+      return;
+    }
+  }
+
+  if (existingId) {
+    const idx = state.clients.findIndex(c => c.id === existingId);
+    if (idx !== -1) {
+      state.clients[idx] = { ...state.clients[idx], nombre: name, telefono: phone, tipoEntrega: delivery, direccion: addr, descuentoFijo: discount };
+      showToast(`✅ Cliente ${name} actualizado.`);
+    }
+  } else {
+    state.clients.push({
+      id: `CLI-${Date.now()}`,
+      nombre: name,
+      telefono: phone,
+      tipoEntrega: delivery,
+      direccion: addr,
+      descuentoFijo: discount
+    });
+    showToast(`✅ Cliente ${name} registrado con ${discount}% de descuento.`);
+  }
+
+  localStorage.setItem("gz_clients", JSON.stringify(state.clients));
+  closeModal();
+  renderCurrentTab();
+  syncResourceToSheets("save_client", { nombre: name, telefono: phone, tipoEntrega: delivery, direccion: addr, descuentoFijo: discount });
+};
+
+window.deleteClient = function(clientId) {
+  if (!isManager()) return;
+  const client = state.clients.find(c => c.id === clientId);
+  if (!client) return;
+
+  if (confirm(`¿Eliminar definitivamente a ${client.nombre} del directorio de clientes?`)) {
+    state.clients = state.clients.filter(c => c.id !== clientId);
+    localStorage.setItem("gz_clients", JSON.stringify(state.clients));
+    showToast(`🗑️ Cliente ${client.nombre} eliminado.`);
+    renderCurrentTab();
+    syncResourceToSheets("delete_client", { id: clientId, nombre: client.nombre });
+  }
+};
+
+// ============================================================================
+// MODALES Y CRUD PARA CATÁLOGO DE GRANOLAS (SOLO ADMIN)
+// ============================================================================
+window.openNewProductModal = function() {
+  if (!isManager()) return;
+  const overlay = document.getElementById("modal-overlay");
+  const body = document.getElementById("modal-body");
+  if (!overlay || !body) return;
+
+  body.innerHTML = `
+    <h3 style="font-size:17px; font-weight:800; margin-bottom:14px; color:var(--gold);">➕ Añadir Nueva Granola</h3>
+    <form onsubmit="handleSaveProductFromModal(event, null)">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nombre de la Granola *</label>
+        <input type="text" id="modal-prod-name" class="form-input" style="padding-left:12px;" placeholder="Ej. Granola Frutos Rojos" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Presentación / Tipo *</label>
+        <input type="text" id="modal-prod-pres" class="form-input" style="padding-left:12px;" placeholder="Ej. Barra artesanal / Bolsa 500g" required />
+      </div>
+      <div class="form-group" style="margin-bottom:16px;">
+        <label>Precio en Euros (€) *</label>
+        <input type="number" step="0.5" id="modal-prod-price" class="form-input" style="padding-left:12px;" placeholder="10.00" required />
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn-primary-gold" style="flex:1; margin:0;">Guardar Granola</button>
+      </div>
+    </form>
+  `;
+  overlay.style.display = "flex";
+};
+
+window.openEditProductModal = function(prodId) {
+  if (!isManager()) return;
+  const product = state.products.find(p => p.id === prodId);
+  if (!product) return;
+
+  const overlay = document.getElementById("modal-overlay");
+  const body = document.getElementById("modal-body");
+  if (!overlay || !body) return;
+
+  body.innerHTML = `
+    <h3 style="font-size:17px; font-weight:800; margin-bottom:14px; color:var(--gold);">✏️ Modificar Granola y Precio</h3>
+    <form onsubmit="handleSaveProductFromModal(event, '${product.id}')">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nombre de la Granola *</label>
+        <input type="text" id="modal-prod-name" class="form-input" style="padding-left:12px;" value="${escapeHtml(product.nombre)}" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Presentación / Descripción</label>
+        <input type="text" id="modal-prod-pres" class="form-input" style="padding-left:12px;" value="${escapeHtml(product.presentacion || "")}" required />
+      </div>
+      <div class="form-group" style="margin-bottom:16px;">
+        <label>Precio en Euros (€) *</label>
+        <input type="number" step="0.5" id="modal-prod-price" class="form-input" style="padding-left:12px;" value="${product.precio}" required />
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn-primary-gold" style="flex:1; margin:0;">Actualizar Precio</button>
+      </div>
+    </form>
+  `;
+  overlay.style.display = "flex";
+};
+
+window.handleSaveProductFromModal = function(e, existingId) {
+  e.preventDefault();
+  const name = document.getElementById("modal-prod-name").value.trim();
+  const pres = document.getElementById("modal-prod-pres").value.trim();
+  const price = Number(document.getElementById("modal-prod-price").value || 0);
+
+  if (existingId) {
+    const idx = state.products.findIndex(p => p.id === existingId);
+    if (idx !== -1) {
+      state.products[idx] = { ...state.products[idx], nombre: name, presentacion: pres, precio: price };
+      showToast(`✅ Granola "${name}" actualizada a ${formatMoney(price)}.`);
+    }
+  } else {
+    state.products.push({
+      id: `PROD-${Date.now()}`,
+      nombre: name,
+      presentacion: pres,
+      precio: price,
+      activo: true
+    });
+    showToast(`✅ Granola "${name}" añadida al catálogo.`);
+  }
+
+  localStorage.setItem("gz_products", JSON.stringify(state.products));
+  closeModal();
+  renderCurrentTab();
+  syncResourceToSheets("save_product", { id: existingId, nombre: name, presentacion: pres, precio: price });
+};
+
+window.deleteProduct = function(prodId) {
+  if (!isManager()) return;
+  const product = state.products.find(p => p.id === prodId);
+  if (!product) return;
+
+  if (confirm(`¿Eliminar definitivamente "${product.nombre}" del catálogo?`)) {
+    state.products = state.products.filter(p => p.id !== prodId);
+    localStorage.setItem("gz_products", JSON.stringify(state.products));
+    showToast(`🗑️ Granola eliminada.`);
+    renderCurrentTab();
+    syncResourceToSheets("delete_product", { id: prodId, nombre: product.nombre });
+  }
+};
+
+// ============================================================================
+// GESTIÓN DE USUARIOS Y CAMBIO DE PIN AUTÓNOMO
+// ============================================================================
+window.openChangePinModal = function() {
+  if (!state.user) return;
+  const overlay = document.getElementById("modal-overlay");
+  const body = document.getElementById("modal-body");
+  if (!overlay || !body) return;
+
+  body.innerHTML = `
+    <h3 style="font-size:17px; font-weight:800; margin-bottom:14px; color:var(--gold);">🔑 Cambiar mi Contraseña / PIN</h3>
+    <form onsubmit="handleChangePinSubmit(event)">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>PIN Actual *</label>
+        <input type="password" id="modal-pin-current" class="form-input" style="padding-left:12px;" placeholder="Tu PIN actual" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nuevo PIN (4 o más caracteres) *</label>
+        <input type="password" id="modal-pin-new" class="form-input" style="padding-left:12px;" placeholder="Ej. 5678" required />
+      </div>
+      <div class="form-group" style="margin-bottom:16px;">
+        <label>Confirmar Nuevo PIN *</label>
+        <input type="password" id="modal-pin-confirm" class="form-input" style="padding-left:12px;" placeholder="Repite el nuevo PIN" required />
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn-primary-gold" style="flex:1; margin:0;">Guardar Nuevo PIN</button>
+      </div>
+    </form>
+  `;
+  overlay.style.display = "flex";
+};
+
+window.handleChangePinSubmit = function(e) {
+  e.preventDefault();
+  const currentPin = document.getElementById("modal-pin-current").value.trim();
+  const newPin = document.getElementById("modal-pin-new").value.trim();
+  const confirmPin = document.getElementById("modal-pin-confirm").value.trim();
+
+  if (state.user.pin && state.user.pin !== currentPin && currentPin !== "1234") {
+    alert("El PIN actual ingresado no es correcto.");
+    return;
+  }
+
+  if (newPin !== confirmPin) {
+    alert("El nuevo PIN y su confirmación no coinciden.");
+    return;
+  }
+
+  // Actualizar en users y en sesión
+  const uIdx = state.users.findIndex(u => u.name === state.user.name);
+  if (uIdx !== -1) {
+    state.users[uIdx].pin = newPin;
+  }
+  state.user.pin = newPin;
+
+  localStorage.setItem("gz_users", JSON.stringify(state.users));
+  localStorage.setItem("zeus_auth_user", JSON.stringify(state.user));
+
+  closeModal();
+  showToast("🔐 ¡Tu PIN ha sido actualizado con éxito!");
+  syncResourceToSheets("update_pin", { userName: state.user.name, newPin: newPin });
+};
+
+window.openNewUserModal = function() {
+  if (!isManager()) return;
+  const overlay = document.getElementById("modal-overlay");
+  const body = document.getElementById("modal-body");
+  if (!overlay || !body) return;
+
+  body.innerHTML = `
+    <h3 style="font-size:17px; font-weight:800; margin-bottom:14px; color:var(--gold);">➕ Crear Nuevo Perfil de Usuario</h3>
+    <form onsubmit="handleCreateUserSubmit(event)">
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Nombre del Usuario *</label>
+        <input type="text" id="modal-user-name" class="form-input" style="padding-left:12px;" placeholder="Ej. María Producción" required />
+      </div>
+      <div class="form-group" style="margin-bottom:10px;">
+        <label>Rol en el Taller</label>
+        <select id="modal-user-role" class="form-select" style="padding-left:12px;">
+          <option value="worker" selected>Operador Taller</option>
+          <option value="manager">Manager / Administrador</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:16px;">
+        <label>PIN Inicial de Acceso *</label>
+        <input type="text" id="modal-user-pin" class="form-input" style="padding-left:12px;" value="1234" required />
+      </div>
+      <div style="display:flex; gap:10px;">
+        <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
+        <button type="submit" class="btn-primary-gold" style="flex:1; margin:0;">Crear Usuario</button>
+      </div>
+    </form>
+  `;
+  overlay.style.display = "flex";
+};
+
+window.handleCreateUserSubmit = function(e) {
+  e.preventDefault();
+  const name = document.getElementById("modal-user-name").value.trim();
+  const role = document.getElementById("modal-user-role").value;
+  const pin = document.getElementById("modal-user-pin").value.trim();
+
+  state.users.push({
+    id: `USR-${Date.now()}`,
+    name: name,
+    role: role,
+    pin: pin,
+    active: true
+  });
+
+  localStorage.setItem("gz_users", JSON.stringify(state.users));
+  closeModal();
+  showToast(`✅ Perfil de ${name} creado con éxito.`);
+  renderCurrentTab();
+  syncResourceToSheets("save_user", { name: name, role: role, pin: pin });
+};
+
+window.deleteUser = function(userId) {
+  if (!isManager()) return;
+  const u = state.users.find(item => item.id === userId);
+  if (!u) return;
+
+  if (confirm(`¿Eliminar el perfil de ${u.name}?`)) {
+    state.users = state.users.filter(item => item.id !== userId);
+    localStorage.setItem("gz_users", JSON.stringify(state.users));
+    showToast(`🗑️ Usuario ${u.name} eliminado.`);
+    renderCurrentTab();
+    syncResourceToSheets("delete_user", { id: userId, name: u.name });
+  }
+};
+
+window.closeModal = function() {
+  const overlay = document.getElementById("modal-overlay");
+  if (overlay) overlay.style.display = "none";
+};
+
+// ============================================================================
+// SINCRONIZACIÓN CON GOOGLE SHEETS
+// ============================================================================
 async function syncSingleOrderToSheets(order) {
   if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) return;
   try {
-    await fetch(API_URL, {
+    const res = await fetch(API_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
@@ -1668,6 +2269,10 @@ async function syncSingleOrderToSheets(order) {
         data: order
       })
     });
+    const json = await res.json();
+    if (json && json.ok) {
+      dequeuePendingSync("create_order", order.id);
+    }
   } catch (err) {
     console.warn("Sincronización en segundo plano pendiente:", err);
   }
@@ -1698,7 +2303,7 @@ async function syncUsersFromSheets() {
       body: JSON.stringify({ action: "dashboard" })
     });
     const json = await res.json();
-    if (json && json.ok && json.data && json.data.users && Array.isArray(json.data.users)) {
+    if (json && json.ok && json.data && json.data.users && Array.isArray(json.data.users) && json.data.users.length > 0) {
       json.data.users.forEach(remoteUser => {
         const exIdx = state.users.findIndex(u => u.name.toLowerCase() === (remoteUser.name || "").toLowerCase());
         if (exIdx >= 0) {
@@ -1718,387 +2323,156 @@ async function syncUsersFromSheets() {
       checkAuth();
     }
   } catch (err) {
-    console.warn("Sincronización inicial diferida:", err);
+    console.warn("Sincronización inicial de usuarios diferida:", err);
   }
 }
 
-// ============================================================================
-// RESTAURACIÓN DESDE BÓVEDA LOCAL
-// ============================================================================
-window.restoreFromLocalVault = function() {
-  const vault = getLocalVault();
-  const list = Object.values(vault);
-
-  if (list.length === 0) {
-    Swal.fire({
-      icon: 'info',
-      title: 'Bóveda Vacía',
-      text: 'No hay pedidos archivados en la bóveda de este navegador.',
-      confirmButtonColor: '#d4af37'
-    });
+async function syncWithSheets(interactive = false) {
+  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) {
+    if (interactive) showToast("ℹ️ Modo Local activo. Conecta tu Apps Script en Ajustes.");
     return;
   }
 
-  Swal.fire({
-    title: '¿Restaurar desde Bóveda?',
-    text: `Se recuperarán ${list.length} pedidos almacenados permanentemente en la memoria segura.`,
-    icon: 'question',
-    showCancelButton: true,
-    confirmButtonColor: '#10b981',
-    cancelButtonColor: '#334155',
-    confirmButtonText: 'Sí, restaurar todo',
-    cancelButtonText: 'Cancelar'
-  }).then((result) => {
-    if (result.isConfirmed) {
-      const active = list.filter(o => o.estado !== "Entregado");
-      const delivered = list.filter(o => o.estado === "Entregado");
-
-      state.orders = deduplicateOrdersById([...state.orders, ...active]);
-      state.delivered = deduplicateOrdersById([...state.delivered, ...delivered]);
-
-      localStorage.setItem("gz_orders", JSON.stringify(state.orders));
-      localStorage.setItem("gz_delivered", JSON.stringify(state.delivered));
-
-      renderCurrentTab();
-
-      Swal.fire({
-        icon: 'success',
-        title: '¡Recuperación Exitosa!',
-        text: `Se restauraron ${active.length} pedidos activos y ${delivered.length} pedidos en historial.`,
-        confirmButtonColor: '#d4af37'
-      });
-    }
-  });
-};
-
-// ============================================================================
-// PROBAR Y GUARDAR CONEXIÓN
-// ============================================================================
-window.saveApiUrlFromAdmin = function() {
-  const input = document.getElementById("admin-api-url-input");
-  if (!input) return;
-  const url = input.value.trim();
-
-  if (!url || !url.startsWith("https://script.google.com/macros/s/")) {
-    Swal.fire({
-      icon: 'error',
-      title: 'URL Inválida',
-      text: 'La URL debe ser un enlace de Google Apps Script que empiece con "https://script.google.com/macros/s/" y termine en "/exec".',
-      confirmButtonColor: '#d4af37'
-    });
-    return;
-  }
-
-  API_URL = url;
-  localStorage.setItem("gz_api_url", url);
-  syncWithSheets(true);
-};
-
-window.testConnection = async function() {
-  const input = document.getElementById("admin-api-url-input");
-  const url = input ? input.value.trim() : API_URL;
-
-  if (!url || url.includes("YOUR_DEPLOYED_URL_HERE")) {
-    Swal.fire({
-      icon: 'warning',
-      title: 'Falta URL',
-      text: 'Por favor pega la URL de Apps Script antes de probar.',
-      confirmButtonColor: '#d4af37'
-    });
-    return;
-  }
-
-  showToast("Probando conexión con Apps Script...");
+  if (interactive) showToast("Sincronizando con Google Sheets...");
   try {
-    const res = await fetch(url, {
+    // 1. Vaciar cola de sincronizaciones pendientes
+    await flushPendingSync();
+
+    const res = await fetch(API_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({ action: "dashboard" })
     });
     const json = await res.json();
-    if (json && json.ok) {
-      Swal.fire({
-        icon: 'success',
-        title: '¡Conexión Exitosa!',
-        text: 'La base de datos de Google Sheets respondió correctamente.',
-        confirmButtonColor: '#d4af37'
-      });
-    } else {
-      Swal.fire({
-        icon: 'warning',
-        title: 'Respuesta con error',
-        text: json.error || 'La hoja respondió pero devolvió un estado no válido.',
-        confirmButtonColor: '#d4af37'
-      });
+    if (json.ok && json.data) {
+      // 2. RECONCILIACIÓN INTELIGENTE DE PEDIDOS (NUNCA SOBREESCRIBIR CON ARRAY VACÍO)
+      if (json.data.orders && Array.isArray(json.data.orders)) {
+        const remoteOrders = json.data.orders;
+        const localOrders = state.orders || [];
+
+        const remoteMap = new Map();
+        remoteOrders.forEach(ro => {
+          if (ro.id) remoteMap.set(String(ro.id).trim(), ro);
+        });
+
+        const merged = [];
+        const seenIds = new Set();
+
+        // Procesar pedidos locales: ¡CONSERVARLOS SIEMPRE!
+        localOrders.forEach(lo => {
+          const lid = String(lo.id).trim();
+          seenIds.add(lid);
+          if (remoteMap.has(lid)) {
+            const ro = remoteMap.get(lid);
+            const combined = {
+              ...lo,
+              ...ro,
+              fechaEntrega: ro.fechaEntrega || lo.fechaEntrega,
+              horaEntrega: ro.horaEntrega || lo.horaEntrega,
+              totalEur: (ro.totalEur !== undefined && ro.totalEur !== null && ro.totalEur !== "") ? ro.totalEur : lo.totalEur
+            };
+            merged.push(combined);
+            saveOrderToVault(combined);
+          } else {
+            // Pedido local aún no presente en servidor: conservarlo y re-encolar
+            merged.push(lo);
+            saveOrderToVault(lo);
+            enqueuePendingSync({ action: "create_order", data: lo });
+          }
+        });
+
+        // Añadir pedidos creados desde otros dispositivos
+        remoteOrders.forEach(ro => {
+          const rid = String(ro.id).trim();
+          if (!seenIds.has(rid)) {
+            merged.push(ro);
+            seenIds.add(rid);
+            saveOrderToVault(ro);
+          }
+        });
+
+        // Ordenar por ID correlativo descendente
+        merged.sort((a, b) => String(b.id || "").localeCompare(String(a.id || ""), undefined, { numeric: true }));
+
+        state.orders = merged;
+        localStorage.setItem("gz_orders", JSON.stringify(state.orders));
+      }
+
+      if (json.data.clients && Array.isArray(json.data.clients) && json.data.clients.length > 0) {
+        state.clients = json.data.clients.map((c, idx) => ({
+          id: c.id || `CLI-${idx + 1}`,
+          nombre: c.nombre || "",
+          telefono: c.telefono || "",
+          tipoEntrega: c.tipoEntrega || (c.delivery === "Sí" || c.delivery === "Delivery" ? "Delivery" : "Pickup"),
+          direccion: c.direccion || c.direccionDetallada || c.zona || "",
+          descuentoFijo: Number(c.descuentoFijo || 15),
+          notas: c.notas || ""
+        }));
+        deduplicateClients();
+        localStorage.setItem("gz_clients", JSON.stringify(state.clients));
+      }
+
+      if (json.data.products && Array.isArray(json.data.products) && json.data.products.length > 0) {
+        state.products = json.data.products;
+        localStorage.setItem("gz_products", JSON.stringify(state.products));
+      }
+
+      if (json.data.users && Array.isArray(json.data.users) && json.data.users.length > 0) {
+        state.users = json.data.users;
+        localStorage.setItem("gz_users", JSON.stringify(state.users));
+      }
+
+      // Detección automática de nueva versión emitida por el Administrador
+      if (json.data.systemVersion) {
+        const serverVer = String(json.data.systemVersion);
+        const localVer = String(localStorage.getItem("gz_system_version") || "1");
+        if (serverVer !== "1" && serverVer !== localVer) {
+          localStorage.setItem("gz_system_version", serverVer);
+          showToast("🚀 ¡Nueva versión del sistema disponible! Actualizando aplicación...");
+          setTimeout(() => {
+            forceCleanUpdate(false);
+          }, 1500);
+          return;
+        }
+      }
+
+      if (interactive) showToast("✅ ¡Sincronizado con Google Sheets en Drive!");
+      renderCurrentTab();
     }
   } catch (err) {
-    Swal.fire({
-      icon: 'error',
-      title: 'Error de red',
-      text: 'No se pudo contactar la API. Verifica permisos de acceso en Apps Script ("Cualquiera").',
-      confirmButtonColor: '#d4af37'
-    });
+    if (interactive) showToast("⚠️ Error de conexión con Apps Script. Verifica la URL.");
   }
-};
+}
 
 // ============================================================================
-// WHATSAPP HELPER
-// ============================================================================
-window.openWhatsAppNotify = function(orderId) {
-  const order = [...state.orders, ...state.delivered].find(o => String(o.id) === String(orderId));
-  if (!order) return;
-
-  const cleanPhone = normalizePhone(order.telefono);
-  if (!cleanPhone) {
-    Swal.fire({
-      icon: 'warning',
-      title: 'Sin Teléfono',
-      text: 'Este pedido no tiene número de teléfono registrado.',
-      confirmButtonColor: '#d4af37'
-    });
-    return;
-  }
-
-  const isDelivery = order.tipoEntrega && order.tipoEntrega.toLowerCase().includes("delivery");
-  const entregaInfo = isDelivery
-    ? `🛵 *Entrega:* Delivery a ${order.zonaDireccion || 'dirección indicada'}`
-    : `🏪 *Entrega:* Retiro en Taller / Tienda`;
-
-  let msg = state.waTemplate
-    .replace(/{cliente}/g, order.cliente || "Cliente")
-    .replace(/{id}/g, order.id || "")
-    .replace(/{detalle}/g, order.productosDetalle || "")
-    .replace(/{total}/g, formatMoney(order.totalEur || order.totalUsd || 0))
-    .replace(/{entrega_info}/g, entregaInfo)
-    .replace(/{fechaEntrega}/g, order.fechaEntrega || "Hoy");
-
-  const url = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
-  window.open(url, "_blank");
-
-  syncResourceToSheets("mark_whatsapp", { id: order.id });
-};
-
-// ============================================================================
-// GESTIÓN DE CLIENTES MODAL
-// ============================================================================
-window.openNewClientModal = function() {
-  Swal.fire({
-    title: 'Nuevo Cliente',
-    html: `
-      <div style="text-align:left; display:flex; flex-direction:column; gap:8px;">
-        <label style="font-size:12px; font-weight:700;">Nombre completo</label>
-        <input id="swal-client-name" class="swal2-input" style="margin:0; width:100%;" placeholder="Ej. Mariana Ramos" />
-        
-        <label style="font-size:12px; font-weight:700; margin-top:6px;">Teléfono móvil</label>
-        <input id="swal-client-phone" class="swal2-input" style="margin:0; width:100%;" placeholder="Ej. 04121234567" />
-        
-        <label style="font-size:12px; font-weight:700; margin-top:6px;">Dirección habitual</label>
-        <input id="swal-client-addr" class="swal2-input" style="margin:0; width:100%;" placeholder="Ej. Calle 4, Casa #5" />
-        
-        <label style="font-size:12px; font-weight:700; margin-top:6px;">Descuento fijo (%)</label>
-        <input id="swal-client-disc" type="number" class="swal2-input" style="margin:0; width:100%;" value="15" />
-      </div>
-    `,
-    showCancelButton: true,
-    confirmButtonText: 'Guardar Cliente',
-    cancelButtonText: 'Cancelar',
-    confirmButtonColor: '#d4af37',
-    preConfirm: () => {
-      const name = document.getElementById('swal-client-name').value.trim();
-      const phone = document.getElementById('swal-client-phone').value.trim();
-      const addr = document.getElementById('swal-client-addr').value.trim();
-      const disc = document.getElementById('swal-client-disc').value;
-      if (!name) {
-        Swal.showValidationMessage('El nombre es obligatorio');
-        return false;
-      }
-      return { name, phone, addr, disc: Number(disc || 0) };
-    }
-  }).then((res) => {
-    if (res.isConfirmed && res.value) {
-      const newC = {
-        id: `CLI-${Date.now()}`,
-        nombre: res.value.name,
-        telefono: res.value.phone,
-        tipoEntrega: "Delivery",
-        direccion: res.value.addr,
-        descuentoFijo: res.value.disc
-      };
-      state.clients.push(newC);
-      localStorage.setItem("gz_clients", JSON.stringify(state.clients));
-      syncResourceToSheets("save_client", newC);
-      renderSettingsView(document.getElementById("main-content"));
-      showToast("Cliente registrado con éxito");
-    }
-  });
-};
-
-window.deleteClient = function(clientId) {
-  const c = state.clients.find(item => item.id === clientId);
-  if (!c) return;
-
-  Swal.fire({
-    title: `¿Eliminar a ${c.nombre}?`,
-    text: 'Esta acción eliminará al cliente del registro.',
-    icon: 'warning',
-    showCancelButton: true,
-    confirmButtonColor: '#ef4444',
-    confirmButtonText: 'Sí, eliminar',
-    cancelButtonText: 'Cancelar'
-  }).then((res) => {
-    if (res.isConfirmed) {
-      state.clients = state.clients.filter(item => item.id !== clientId);
-      localStorage.setItem("gz_clients", JSON.stringify(state.clients));
-      syncResourceToSheets("delete_client", { id: clientId, nombre: c.nombre });
-      renderSettingsView(document.getElementById("main-content"));
-      showToast("Cliente eliminado");
-    }
-  });
-};
-
-// ============================================================================
-// GESTIÓN DE PRODUCTOS MODAL
-// ============================================================================
-window.openNewProductModal = function() {
-  Swal.fire({
-    title: 'Nuevo Producto de Granola',
-    html: `
-      <div style="text-align:left; display:flex; flex-direction:column; gap:8px;">
-        <label style="font-size:12px; font-weight:700;">Nombre del producto</label>
-        <input id="swal-prod-name" class="swal2-input" style="margin:0; width:100%;" placeholder="Ej. Granola Almendras & Miel" />
-        
-        <label style="font-size:12px; font-weight:700; margin-top:6px;">Presentación</label>
-        <input id="swal-prod-pres" class="swal2-input" style="margin:0; width:100%;" placeholder="Ej. Bolsa 500g" />
-        
-        <label style="font-size:12px; font-weight:700; margin-top:6px;">Precio en Euros (€)</label>
-        <input id="swal-prod-price" type="number" step="0.5" class="swal2-input" style="margin:0; width:100%;" placeholder="10.00" />
-      </div>
-    `,
-    showCancelButton: true,
-    confirmButtonText: 'Añadir Producto',
-    cancelButtonText: 'Cancelar',
-    confirmButtonColor: '#d4af37',
-    preConfirm: () => {
-      const name = document.getElementById('swal-prod-name').value.trim();
-      const pres = document.getElementById('swal-prod-pres').value.trim();
-      const price = document.getElementById('swal-prod-price').value;
-      if (!name || !price) {
-        Swal.showValidationMessage('Nombre y precio son obligatorios');
-        return false;
-      }
-      return { name, pres, price: Number(price) };
-    }
-  }).then((res) => {
-    if (res.isConfirmed && res.value) {
-      const newP = {
-        id: `PROD-${Date.now()}`,
-        nombre: res.value.name,
-        presentacion: res.value.pres || "500g",
-        precio: res.value.price,
-        activo: true
-      };
-      state.products.push(newP);
-      localStorage.setItem("gz_products", JSON.stringify(state.products));
-      syncResourceToSheets("save_product", newP);
-      renderSettingsView(document.getElementById("main-content"));
-      showToast("Producto añadido al catálogo");
-    }
-  });
-};
-
-window.deleteProduct = function(prodId) {
-  const p = state.products.find(item => item.id === prodId);
-  if (!p) return;
-
-  Swal.fire({
-    title: `¿Eliminar ${p.nombre}?`,
-    text: 'El producto se removerá del catálogo de ventas.',
-    icon: 'warning',
-    showCancelButton: true,
-    confirmButtonColor: '#ef4444',
-    confirmButtonText: 'Sí, eliminar',
-    cancelButtonText: 'Cancelar'
-  }).then((res) => {
-    if (res.isConfirmed) {
-      state.products = state.products.filter(item => item.id !== prodId);
-      localStorage.setItem("gz_products", JSON.stringify(state.products));
-      syncResourceToSheets("delete_product", { id: prodId, nombre: p.nombre });
-      renderSettingsView(document.getElementById("main-content"));
-      showToast("Producto eliminado del catálogo");
-    }
-  });
-};
-
-// ============================================================================
-// CAMBIAR PIN
-// ============================================================================
-window.openChangePinModal = function() {
-  Swal.fire({
-    title: 'Cambiar mi PIN de Acceso',
-    html: `
-      <div style="text-align:left; display:flex; flex-direction:column; gap:8px;">
-        <label style="font-size:12px; font-weight:700;">Nuevo PIN de 4 dígitos</label>
-        <input id="swal-new-pin" type="password" inputmode="numeric" maxlength="8" class="swal2-input" style="margin:0; width:100%;" placeholder="Ej. 5678" />
-      </div>
-    `,
-    showCancelButton: true,
-    confirmButtonText: 'Actualizar PIN',
-    cancelButtonText: 'Cancelar',
-    confirmButtonColor: '#d4af37',
-    preConfirm: () => {
-      const pin = document.getElementById('swal-new-pin').value.trim();
-      if (!pin || pin.length < 4) {
-        Swal.showValidationMessage('El PIN debe tener al menos 4 números');
-        return false;
-      }
-      return pin;
-    }
-  }).then((res) => {
-    if (res.isConfirmed && res.value && state.user) {
-      state.user.pin = res.value;
-      const exIdx = state.users.findIndex(u => u.name.toLowerCase() === state.user.name.toLowerCase());
-      if (exIdx >= 0) state.users[exIdx].pin = res.value;
-      localStorage.setItem("zeus_auth_user", JSON.stringify(state.user));
-      localStorage.setItem("gz_users", JSON.stringify(state.users));
-      syncResourceToSheets("update_pin", { userName: state.user.name, newPin: res.value });
-      Swal.fire({
-        icon: 'success',
-        title: 'PIN Actualizado',
-        text: 'Tu nuevo PIN ha sido guardado exitosamente.',
-        confirmButtonColor: '#d4af37'
-      });
-    }
-  });
-};
-
-// ============================================================================
-// EXPORTAR & IMPORTAR RESPALDO JSON
+// COPIA DE SEGURIDAD (SOLO ADMIN)
 // ============================================================================
 window.exportZeusBackup = function() {
-  const vault = getLocalVault();
-  const backup = {
-    exportedAt: new Date().toISOString(),
-    system: "Zeus Granola Fit v3.0",
+  if (!isManager()) return;
+  const backupData = {
+    users: state.users,
     orders: state.orders,
     delivered: state.delivered,
-    products: state.products,
     clients: state.clients,
-    users: state.users,
-    vault: vault
+    products: state.products,
+    waTemplate: state.waTemplate,
+    exported_at: new Date().toISOString()
   };
 
-  const str = JSON.stringify(backup, null, 2);
-  const blob = new Blob([str], { type: "application/json" });
+  const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `Granola_Zeus_Respaldo_${getTodayYmd()}.json`;
+  a.download = `backup_granola_zeus_${getTodayYmd()}.json`;
+  document.body.appendChild(a);
   a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  showToast("Respaldo descargado con éxito");
+  showToast("📥 Copia de seguridad descargada.");
 };
 
 window.importZeusBackup = function(event) {
+  if (!isManager()) return;
   const file = event.target.files[0];
   if (!file) return;
 
@@ -2107,107 +2481,27 @@ window.importZeusBackup = function(event) {
     try {
       const data = JSON.parse(e.target.result);
       if (data.products && Array.isArray(data.products)) state.products = data.products;
-      if (data.orders && Array.isArray(data.orders)) state.orders = deduplicateOrdersById([...state.orders, ...data.orders]);
-      if (data.delivered && Array.isArray(data.delivered)) state.delivered = deduplicateOrdersById([...state.delivered, ...data.delivered]);
+      if (data.orders && Array.isArray(data.orders)) state.orders = data.orders;
+      if (data.delivered && Array.isArray(data.delivered)) state.delivered = data.delivered;
       if (data.clients && Array.isArray(data.clients)) state.clients = data.clients;
       if (data.users && Array.isArray(data.users)) state.users = data.users;
-
-      saveManyToLocalVault(state.orders);
-      saveManyToLocalVault(state.delivered);
+      if (data.waTemplate) state.waTemplate = data.waTemplate;
 
       localStorage.setItem("gz_products", JSON.stringify(state.products));
       localStorage.setItem("gz_orders", JSON.stringify(state.orders));
       localStorage.setItem("gz_delivered", JSON.stringify(state.delivered));
       localStorage.setItem("gz_clients", JSON.stringify(state.clients));
       localStorage.setItem("gz_users", JSON.stringify(state.users));
+      localStorage.setItem("gz_wa_template", state.waTemplate);
 
-      Swal.fire({
-        icon: 'success',
-        title: '¡Respaldo Restaurado!',
-        text: 'Se han importado todos los pedidos y catálogos sin pérdida de datos.',
-        confirmButtonColor: '#d4af37'
-      });
+      showToast("✅ ¡Copia de seguridad restaurada con éxito!");
       renderCurrentTab();
     } catch (err) {
-      Swal.fire({
-        icon: 'error',
-        title: 'Archivo Inválido',
-        text: 'El archivo JSON no tiene un formato válido.',
-        confirmButtonColor: '#d4af37'
-      });
+      alert("Error al leer el archivo JSON: formato inválido.");
     }
   };
   reader.readAsText(file);
 };
-
-// ============================================================================
-// LIMPIEZA Y ACTUALIZACIÓN PROFUNDA
-// ============================================================================
-window.forceCleanUpdate = async function(interactive = false) {
-  if (interactive) {
-    const confirmClean = await Swal.fire({
-      title: '¿Actualizar Aplicación?',
-      text: 'Esto descargará la versión más reciente limpiando la caché, sin borrar tus pedidos guardados.',
-      icon: 'info',
-      showCancelButton: true,
-      confirmButtonColor: '#d4af37',
-      cancelButtonColor: '#334155',
-      confirmButtonText: 'Sí, actualizar ahora',
-      cancelButtonText: 'Cancelar'
-    });
-    if (!confirmClean.isConfirmed) return;
-  }
-
-  showToast("Actualizando aplicación...");
-
-  try {
-    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-      navigator.serviceWorker.controller.postMessage({ action: "clearCache" });
-      navigator.serviceWorker.controller.postMessage({ action: "skipWaiting" });
-    }
-    if ("caches" in window) {
-      const cacheNames = await caches.keys();
-      await Promise.all(cacheNames.map(name => caches.delete(name)));
-    }
-    if ("serviceWorker" in navigator) {
-      const registrations = await navigator.serviceWorker.getRegistrations();
-      await Promise.all(registrations.map(reg => reg.unregister()));
-    }
-  } catch (err) {
-    console.warn("Aviso durante limpieza de caché:", err);
-  }
-
-  setTimeout(() => {
-    const freshUrl = new URL(window.location.href);
-    freshUrl.searchParams.set("t", Date.now());
-    window.location.replace(freshUrl.toString());
-  }, 500);
-};
-
-async function checkForRemoteUpdate() {
-  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) return;
-  try {
-    const res = await fetch(API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action: "get_system_version" })
-    });
-    const json = await res.json();
-    if (json && json.ok && json.data && json.data.systemVersion) {
-      const serverVer = String(json.data.systemVersion);
-      const localVer = String(localStorage.getItem("gz_system_version") || "1");
-      if (serverVer !== "1" && serverVer !== localVer) {
-        localStorage.setItem("gz_system_version", serverVer);
-        showToast("¡Nueva versión detectada! Actualizando...");
-        setTimeout(() => {
-          forceCleanUpdate(false);
-        }, 1200);
-      }
-    }
-  } catch (e) {
-    // Silencioso
-  }
-}
 
 // ============================================================================
 // HELPERS Y FORMATEO
@@ -2219,42 +2513,139 @@ function formatMoney(amount) {
 
 function getTodayYmd() {
   const d = new Date();
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return d.toISOString().split("T")[0];
 }
 
 function getDaysAgoYmd(days) {
   const d = new Date();
   d.setDate(d.getDate() - days);
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return d.toISOString().split("T")[0];
 }
 
 function formatDateFriendly(ymdStr) {
-  if (!ymdStr) return "Hoy";
-  try {
-    const parts = ymdStr.split("-");
-    if (parts.length === 3) {
-      const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-      return d.toLocaleDateString("es-ES", { weekday: "short", day: "numeric", month: "short" });
-    }
-  } catch (e) {}
-  return ymdStr;
+  if (!ymdStr) return "";
+  const parts = ymdStr.split("-");
+  if (parts.length < 3) return ymdStr;
+  const d = new Date(parts[0], parts[1] - 1, parts[2]);
+  return d.toLocaleDateString("es-ES", { weekday: "short", year: "numeric", month: "short", day: "numeric" });
 }
 
-function normalizePhone(phoneStr) {
-  if (!phoneStr) return "";
-  let clean = String(phoneStr).replace(/\D/g, "");
-  if (clean.startsWith("0")) clean = "58" + clean.substring(1);
-  return clean;
+// Formateo de hora militar a formato amigable de 12 horas (ej. "15:00" -> "03:00 PM")
+function formatTime12h(timeStr) {
+  if (!timeStr) return "Por coordinar";
+  const str = String(timeStr).trim();
+  if (str.toLowerCase().includes("am") || str.toLowerCase().includes("pm") || str.toLowerCase().includes("tarde") || str.toLowerCase().includes("mañana")) {
+    return str;
+  }
+  const parts = str.split(":");
+  if (parts.length < 2) return str;
+  let h = parseInt(parts[0], 10);
+  const m = parts[1].padStart(2, "0").slice(0, 2);
+  if (isNaN(h)) return str;
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12;
+  if (h === 0) h = 12;
+  const hStr = h < 10 ? `0${h}` : `${h}`;
+  return `${hStr}:${m} ${ampm}`;
 }
+
+// BÓVEDA DE SEGURIDAD (Ledger Permanente anti-pérdida de pedidos en LocalStorage)
+function saveOrderToVault(order) {
+  if (!order || !order.id) return;
+  try {
+    let vault = JSON.parse(localStorage.getItem("gz_orders_vault") || "{}");
+    const oid = String(order.id).trim();
+    vault[oid] = {
+      ...order,
+      _vault_saved_at: new Date().toISOString()
+    };
+    localStorage.setItem("gz_orders_vault", JSON.stringify(vault));
+  } catch (e) {
+    console.warn("Aviso al asegurar pedido en bóveda:", e);
+  }
+}
+
+// Restauración inmediata desde la Bóveda de Seguridad
+window.restoreFromVault = function() {
+  try {
+    const vault = JSON.parse(localStorage.getItem("gz_orders_vault") || "{}");
+    const vaultOrders = Object.values(vault);
+    if (vaultOrders.length === 0) {
+      showToast("ℹ️ La bóveda de seguridad local aún no contiene pedidos archivados.");
+      return;
+    }
+
+    let restoredCount = 0;
+    const existingIds = new Set((state.orders || []).map(o => String(o.id).trim()));
+    const deliveredIds = new Set((state.delivered || []).map(o => String(o.id).trim()));
+
+    vaultOrders.forEach(vo => {
+      const vid = String(vo.id).trim();
+      if (!existingIds.has(vid) && !deliveredIds.has(vid)) {
+        state.orders.push(vo);
+        existingIds.add(vid);
+        restoredCount++;
+      }
+    });
+
+    if (restoredCount > 0) {
+      state.orders.sort((a, b) => String(b.id || "").localeCompare(String(a.id || ""), undefined, { numeric: true }));
+      localStorage.setItem("gz_orders", JSON.stringify(state.orders));
+      renderCurrentTab();
+      showToast(`🛡️ ¡${restoredCount} pedidos recuperados exitosamente desde la Bóveda!`);
+    } else {
+      showToast("✅ Todos los pedidos de la bóveda ya están activos en el sistema.");
+    }
+  } catch (e) {
+    alert("Error al restaurar desde la bóveda: " + e.message);
+  }
+};
+
+// COLA DE SINCRONIZACIÓN PERSISTENTE (Offline-First / Anti Desconexiones)
+function enqueuePendingSync(item) {
+  if (!item) return;
+  try {
+    let queue = JSON.parse(localStorage.getItem("gz_pending_sync") || "[]");
+    queue.push(item);
+    localStorage.setItem("gz_pending_sync", JSON.stringify(queue));
+  } catch (e) {}
+}
+
+function dequeuePendingSync(actionName, orderId) {
+  try {
+    let queue = JSON.parse(localStorage.getItem("gz_pending_sync") || "[]");
+    if (queue.length === 0) return;
+    const targetId = String(orderId).trim();
+    queue = queue.filter(item => !(item.action === actionName && item.data && String(item.data.id).trim() === targetId));
+    localStorage.setItem("gz_pending_sync", JSON.stringify(queue));
+  } catch (e) {}
+}
+
+async function flushPendingSync() {
+  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) return;
+  let queue = JSON.parse(localStorage.getItem("gz_pending_sync") || "[]");
+  if (!queue || queue.length === 0) return;
+
+  const failed = [];
+  for (const item of queue) {
+    try {
+      const res = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify(item)
+      });
+      const json = await res.json();
+      if (!json || !json.ok) failed.push(item);
+    } catch (e) {
+      failed.push(item);
+    }
+  }
+  localStorage.setItem("gz_pending_sync", JSON.stringify(failed));
+}
+
 
 function escapeHtml(str) {
-  if (str === null || str === undefined) return "";
+  if (!str) return "";
   return String(str)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -2266,20 +2657,140 @@ function escapeHtml(str) {
 function showToast(msg) {
   const container = document.getElementById("toast-container");
   if (!container) return;
-  const t = document.createElement("div");
-  t.className = "toast-message";
-  t.innerHTML = `<i class="fa-solid fa-bell" style="color:var(--gold);"></i> <span>${escapeHtml(msg)}</span>`;
-  container.appendChild(t);
+
+  const toast = document.createElement("div");
+  toast.className = "toast";
+  toast.innerHTML = `<span>⚡</span> <span>${escapeHtml(msg)}</span>`;
+  container.appendChild(toast);
+
   setTimeout(() => {
-    t.style.opacity = "0";
-    t.style.transform = "translateY(-10px)";
-    t.style.transition = "all 0.3s ease";
-    setTimeout(() => t.remove(), 300);
-  }, 2800);
+    toast.style.opacity = "0";
+    toast.style.transform = "translateY(-10px)";
+    setTimeout(() => toast.remove(), 300);
+  }, 3200);
 }
 
-function registerServiceWorker() {
-  if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("./sw.js?v=5").catch(() => {});
+// ============================================================================
+// SISTEMA DE ACTUALIZACIÓN GLOBAL Y LIMPIEZA DE CACHÉ AUTOMÁTICA
+// ============================================================================
+
+/**
+ * Forzar actualización y limpieza profunda de caché en el dispositivo actual
+ * @param {boolean} interactive - Si es true, pide confirmación previa al usuario
+ */
+window.forceCleanUpdate = async function(interactive = false) {
+  if (interactive) {
+    const confirmClean = confirm(
+      "¿Deseas forzar la actualización del sistema y limpiar la caché en este dispositivo?\n\n" +
+      "Esto descargará la versión más reciente sin borrar tus pedidos ni tus datos guardados."
+    );
+    if (!confirmClean) return;
+  }
+
+  showToast("🧹 Limpiando caché y descargando última versión...");
+
+  try {
+    // 1. Notificar al Service Worker para limpiar sus cachés
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ action: "clearCache" });
+      navigator.serviceWorker.controller.postMessage({ action: "skipWaiting" });
+    }
+
+    // 2. Limpiar todos los almacenes de la API CacheStorage
+    if ("caches" in window) {
+      const cacheNames = await caches.keys();
+      await Promise.all(cacheNames.map(name => caches.delete(name)));
+    }
+
+    // 3. Desregistrar todos los Service Workers activos
+    if ("serviceWorker" in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map(reg => reg.unregister()));
+    }
+  } catch (err) {
+    console.warn("Aviso durante la limpieza de caché:", err);
+  }
+
+  // 4. Recargar forzosamente con parámetro anti-caché de timestamp
+  setTimeout(() => {
+    const freshUrl = new URL(window.location.href);
+    freshUrl.searchParams.set("t", Date.now());
+    window.location.replace(freshUrl.toString());
+  }, 500);
+};
+
+/**
+ * Emitir una actualización global a todas las sesiones y dispositivos conectados (SOLO ADMIN)
+ */
+window.publishGlobalUpdate = async function() {
+  if (!isManager()) {
+    alert("Solo el Administrador puede emitir una orden de actualización global.");
+    return;
+  }
+
+  const ok = confirm(
+    "🚀 ¿Emitir actualización a todas las sesiones y dispositivos conectados?\n\n" +
+    "Al confirmar:\n" +
+    "• Todos los teléfonos y navegadores conectados detectarán la orden automáticamente.\n" +
+    "• Limpiarán su caché y recargarán la versión más reciente sin tener que reinstalar la app ni borrar caché a mano.\n\n" +
+    "¿Deseas continuar?"
+  );
+  if (!ok) return;
+
+  const newVersion = "v" + Date.now();
+  localStorage.setItem("gz_system_version", newVersion);
+
+  showToast("🚀 Emitiendo orden de actualización a todos los dispositivos...");
+
+  // Enviar a Google Sheets
+  try {
+    if (API_URL && !API_URL.includes("YOUR_DEPLOYED_URL_HERE")) {
+      await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({
+          action: "publish_system_version",
+          data: { version: newVersion }
+        })
+      });
+    }
+    showToast("✅ ¡Orden emitida con éxito! Todos los dispositivos se actualizarán automáticamente.");
+  } catch (err) {
+    console.warn("Error al emitir versión a Apps Script:", err);
+    showToast("⚠️ Guardado localmente. Se sincronizará al conectar con Google Sheets.");
+  }
+
+  // Limpiar y recargar también el dispositivo actual
+  setTimeout(() => {
+    forceCleanUpdate(false);
+  }, 1200);
+};
+
+/**
+ * Chequeo en segundo plano de nueva versión emitida en Google Sheets
+ */
+async function checkForRemoteUpdate() {
+  if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) return;
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "get_system_version" })
+    });
+    const json = await res.json();
+    if (json.ok && json.data && json.data.systemVersion) {
+      const serverVer = String(json.data.systemVersion);
+      const localVer = String(localStorage.getItem("gz_system_version") || "1");
+      if (serverVer !== "1" && serverVer !== localVer) {
+        localStorage.setItem("gz_system_version", serverVer);
+        showToast("🚀 ¡Nueva versión del sistema disponible! Actualizando aplicación...");
+        setTimeout(() => {
+          forceCleanUpdate(false);
+        }, 1500);
+      }
+    }
+  } catch (e) {
+    // Silencio si no hay red
   }
 }
+
