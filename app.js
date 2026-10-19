@@ -49,7 +49,17 @@ Tu pedido *#{id}* ha sido procesado exitosamente.
 const state = {
   currentTab: "today",
   theme: localStorage.getItem("gz_theme") || "dark",
-  user: JSON.parse(localStorage.getItem("zeus_auth_user") || "null"),
+  user: (() => {
+    try {
+      const u = JSON.parse(localStorage.getItem("zeus_auth_user") || "null");
+      if (u && typeof u.token === "string" && u.token.length > 5) return u;
+      localStorage.removeItem("zeus_auth_user");
+      return null;
+    } catch (e) {
+      localStorage.removeItem("zeus_auth_user");
+      return null;
+    }
+  })(),
   orders: JSON.parse(localStorage.getItem("gz_orders") || "[]"),
   delivered: JSON.parse(localStorage.getItem("gz_delivered") || "[]"),
   products: JSON.parse(localStorage.getItem("gz_products") || JSON.stringify(DEFAULT_PRODUCTS)),
@@ -210,19 +220,22 @@ function checkAuth() {
 
   // Comprobar si existe una sesión válida con token criptográfico firmado
   const isLocalDemo = API_URL && API_URL.includes("YOUR_DEPLOYED_URL_HERE");
-  const hasValidSession = state.user && (state.user.token || isLocalDemo);
+  
+  // Una sesión es válida ÚNICAMENTE si tiene un token válido emitido por el login
+  const hasValidToken = state.user && typeof state.user.token === "string" && (
+    (isLocalDemo && state.user.token === "local-demo-token") ||
+    (!isLocalDemo && state.user.token.includes("."))
+  );
 
-  if (hasValidSession) {
+  if (hasValidToken) {
     if (loginView) loginView.style.display = "none";
     if (appView) appView.style.display = "flex";
     if (userRoleDisplay) userRoleDisplay.textContent = `${state.user.name} · ${isManager() ? "👑 Manager" : "Taller"}`;
     renderCurrentTab();
   } else {
-    // Si state.user no tiene token y la API está conectada, limpiar sesión obsoleta
-    if (state.user && !state.user.token && !isLocalDemo) {
-      state.user = null;
-      localStorage.removeItem("zeus_auth_user");
-    }
+    // Si no tiene token criptográfico firmado, limpiar sesión obsoleta y exigir Login con PIN
+    state.user = null;
+    localStorage.removeItem("zeus_auth_user");
     if (loginView) loginView.style.display = "flex";
     if (appView) appView.style.display = "none";
   }
@@ -362,12 +375,10 @@ window.handleLoginSubmit = async function(e) {
 };
 
 function doLogout() {
-  if (confirm("¿Deseas cerrar sesión en Zeus Granola Fit?")) {
-    state.user = null;
-    localStorage.removeItem("zeus_auth_user");
-    showToast("Sesión cerrada.");
-    checkAuth();
-  }
+  state.user = null;
+  localStorage.removeItem("zeus_auth_user");
+  showToast("🔒 Sesión cerrada con éxito.");
+  checkAuth();
 }
 
 // ============================================================================
