@@ -22,16 +22,14 @@ const DEFAULT_PRODUCTS = [
   { id: "PROD-6", nombre: "Granola tipo Cereal (sin pasitas)", presentacion: "Bolsa cereal", precio: 10.0, activo: true }
 ];
 
-// Usuarios autorizados con PIN predeterminado
+// Usuarios autorizados base
 const DEFAULT_USERS = [
-  { id: "USR-1", name: "Admin Zeus", role: "manager", pin: "1234", active: true },
-  { id: "USR-2", name: "Producción Zeus", role: "worker", pin: "1234", active: true }
+  { id: "USR-1", name: "Admin Zeus", role: "manager", active: true },
+  { id: "USR-2", name: "Producción Zeus", role: "worker", active: true }
 ];
 
-// Clientes iniciales con descuento habitual
-const DEFAULT_CLIENTS = [
-  { id: "CLI-1", nombre: "Cliente Frecuente 15%", telefono: "04124593653", tipoEntrega: "Delivery", direccion: "Zona Centro", descuentoFijo: 15 }
-];
+// Clientes iniciales (vacío por seguridad de datos)
+const DEFAULT_CLIENTS = [];
 
 // Plantilla predeterminada de WhatsApp con hora de entrega visible
 const DEFAULT_WA_TEMPLATE = `¡Hola, {cliente}! 🥣 Te escribimos de *Zeus Granola Fit* ⚡
@@ -84,23 +82,26 @@ document.addEventListener("DOMContentLoaded", () => {
   bindGlobalEvents();
   registerServiceWorker();
 
-  // Carga previa en segundo plano de usuarios registrados desde Google Sheets
-  syncUsersFromSheets();
+  // Si ya existe una sesión autenticada con token, sincronizar datos
+  if (state.user && state.user.token) {
+    syncWithSheets(false);
+  }
 
-  // Sincronización automática de pedidos, clientes y catálogo desde Google Sheets
-  syncWithSheets(false);
-
-  // Polling automático cada 60s para chequear si el Administrador emitió una nueva versión y refrescar datos
+  // Polling automático cada 60s para chequear versión y refrescar datos si está autenticado
   setInterval(() => {
     checkForRemoteUpdate();
-    syncWithSheets(false);
+    if (state.user && state.user.token) {
+      syncWithSheets(false);
+    }
   }, 60000);
 
   // Detección inmediata al volver a la pestaña o app
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
       checkForRemoteUpdate();
-      syncWithSheets(false);
+      if (state.user && state.user.token) {
+        syncWithSheets(false);
+      }
     }
   });
 });
@@ -184,7 +185,7 @@ function generateNextOrderId() {
 }
 
 // ============================================================================
-// SISTEMA DE AUTENTICACIÓN (LOGIN & LOGOUT)
+// SISTEMA DE AUTENTICACIÓN (LOGIN & LOGOUT CON TOKENS CRIPTOGRÁFICOS)
 // ============================================================================
 function checkAuth() {
   const loginView = document.getElementById("login-view");
@@ -193,11 +194,11 @@ function checkAuth() {
   const loginUserInput = document.getElementById("login-user");
   const userDatalist = document.getElementById("registered-users-list");
 
-  // Poblar sugerencias datalist con los usuarios registrados
+  // Si hay usuarios conocidos en este dispositivo, sugerir nombres
   if (userDatalist && state.users && Array.isArray(state.users)) {
     userDatalist.innerHTML = state.users
-      .filter(u => u.active !== false)
-      .map(u => `<option value="${escapeHtml(u.name)}">${escapeHtml(u.role === "manager" ? "Manager / Admin" : "Taller")}</option>`)
+      .filter(u => u && u.name)
+      .map(u => `<option value="${escapeHtml(u.name)}"></option>`)
       .join("");
   }
 
@@ -207,15 +208,31 @@ function checkAuth() {
     if (savedLast) loginUserInput.value = savedLast;
   }
 
-  if (state.user) {
+  // Comprobar si existe una sesión válida con token criptográfico firmado
+  const isLocalDemo = API_URL && API_URL.includes("YOUR_DEPLOYED_URL_HERE");
+  const hasValidSession = state.user && (state.user.token || isLocalDemo);
+
+  if (hasValidSession) {
     if (loginView) loginView.style.display = "none";
     if (appView) appView.style.display = "flex";
     if (userRoleDisplay) userRoleDisplay.textContent = `${state.user.name} · ${isManager() ? "👑 Manager" : "Taller"}`;
     renderCurrentTab();
   } else {
+    // Si state.user no tiene token y la API está conectada, limpiar sesión obsoleta
+    if (state.user && !state.user.token && !isLocalDemo) {
+      state.user = null;
+      localStorage.removeItem("zeus_auth_user");
+    }
     if (loginView) loginView.style.display = "flex";
     if (appView) appView.style.display = "none";
   }
+}
+
+function handleSessionExpired(msg) {
+  showToast("🔒 Tu sesión ha expirado o no es válida. Por favor inicia sesión de nuevo.");
+  state.user = null;
+  localStorage.removeItem("zeus_auth_user");
+  checkAuth();
 }
 
 window.handleLoginSubmit = async function(e) {
@@ -239,31 +256,12 @@ window.handleLoginSubmit = async function(e) {
     return false;
   }
 
-  // Si se seleccionó con etiqueta de datalist como "Admin Zeus (Manager)", limpiar etiqueta
+  // Limpiar etiquetas de datalist si las hubiere
   userName = userName.replace(/\s*\((Manager|Taller|Admin|Operador)\)\s*$/i, "").trim();
 
   if (errorMsg) errorMsg.style.display = "none";
 
-  // 1. Validar contra usuarios en memoria / localStorage
-  const foundUser = state.users.find(u => 
-    u.name.toLowerCase() === userName.toLowerCase() && u.active !== false
-  );
-
-  const isMasterPass = (password === "1234" || password === "zeus2025" || password === "admin123");
-
-  if (foundUser) {
-    if (password === foundUser.pin || isMasterPass) {
-      state.user = foundUser;
-      localStorage.setItem("zeus_auth_user", JSON.stringify(foundUser));
-      localStorage.setItem("zeus_last_username", foundUser.name);
-      showToast(`⚡ ¡Bienvenido, ${foundUser.name}!`);
-      checkAuth();
-      syncWithSheets(false);
-      return false;
-    }
-  }
-
-  // 2. Si no coincide localmente, verificar con Google Apps Script si está conectado
+  // 1. Si la API está configurada, autenticar online contra Google Apps Script (o Cloudflare Worker)
   if (API_URL && !API_URL.includes("YOUR_DEPLOYED_URL_HERE")) {
     if (btnSubmit) {
       btnSubmit.disabled = true;
@@ -280,30 +278,53 @@ window.handleLoginSubmit = async function(e) {
       });
       const json = await res.json();
       if (json && json.ok && json.data) {
-        const remoteUser = json.data;
+        const remoteUser = json.data.user || json.data;
+        const token = json.data.token || "";
+
         const uObj = {
           id: remoteUser.id || `USR-${Date.now()}`,
           name: remoteUser.name || userName,
           role: remoteUser.role || "worker",
-          pin: password,
+          token: token,
           active: true
         };
+
         const exIdx = state.users.findIndex(u => u.name.toLowerCase() === uObj.name.toLowerCase());
         if (exIdx >= 0) {
-          state.users[exIdx] = uObj;
+          state.users[exIdx] = { ...state.users[exIdx], ...uObj };
         } else {
           state.users.push(uObj);
         }
         localStorage.setItem("gz_users", JSON.stringify(state.users));
+
         state.user = uObj;
         localStorage.setItem("zeus_auth_user", JSON.stringify(uObj));
         localStorage.setItem("zeus_last_username", uObj.name);
+
         showToast(`⚡ ¡Bienvenido, ${uObj.name}!`);
         checkAuth();
+        syncWithSheets(false);
+        return false;
+      } else {
+        if (errorMsg) {
+          errorMsg.textContent = json.error || "Credenciales inválidas. Verifica tu usuario y PIN.";
+          errorMsg.style.display = "block";
+        }
         return false;
       }
     } catch (netErr) {
-      console.warn("Verificación online diferida:", netErr);
+      console.warn("Verificación online no disponible:", netErr);
+      // Si estamos sin conexión pero el usuario ya tenía sesión activa en este equipo:
+      if (!navigator.onLine && state.user && state.user.token && state.user.name.toLowerCase() === userName.toLowerCase()) {
+        showToast("⚠️ Modo sin conexión activo (sesión previa validada).");
+        checkAuth();
+        return false;
+      }
+      if (errorMsg) {
+        errorMsg.textContent = "Error al conectar con el servidor. Revisa tu conexión a internet.";
+        errorMsg.style.display = "block";
+      }
+      return false;
     } finally {
       if (btnSubmit) {
         btnSubmit.disabled = false;
@@ -312,42 +333,31 @@ window.handleLoginSubmit = async function(e) {
     }
   }
 
-  // 3. Si el usuario ya existe localmente pero el PIN no coincidió y no es el maestro
-  if (foundUser && !isMasterPass && foundUser.pin && password !== foundUser.pin) {
-    if (errorMsg) {
-      errorMsg.textContent = `Contraseña o PIN incorrecto para "${foundUser.name}". Si la olvidaste, puedes usar el PIN predeterminado 1234.`;
-      errorMsg.style.display = "block";
+  // 2. Modo local de prueba si la API no está configurada aún (primer clon local)
+  if (API_URL.includes("YOUR_DEPLOYED_URL_HERE")) {
+    const isMaster = (password === "1234");
+    if (!isMaster) {
+      if (errorMsg) {
+        errorMsg.textContent = "Modo local: usa el PIN 1234 o conecta tu API en Ajustes.";
+        errorMsg.style.display = "block";
+      }
+      return false;
     }
+    const localUser = {
+      id: `USR-${Date.now()}`,
+      name: userName,
+      role: (userName.toLowerCase().includes("admin") || userName.toLowerCase().includes("mois")) ? "manager" : "worker",
+      token: "local-demo-token",
+      active: true
+    };
+    state.user = localUser;
+    localStorage.setItem("zeus_auth_user", JSON.stringify(localUser));
+    localStorage.setItem("zeus_last_username", localUser.name);
+    showToast(`⚡ Modo local de prueba activo: ${localUser.name}`);
+    checkAuth();
     return false;
   }
 
-  // 4. Si es un usuario nuevo (o creado en otra sesión/equipo):
-  // Se le permite el acceso asignando el rol inteligente (igual que en Creaciones JJ)
-  const lower = userName.toLowerCase();
-  const assignedRole = (lower.includes("mois") || lower.includes("admin") || lower.includes("zeus") || lower.includes("manag") || lower.includes("jef"))
-    ? "manager"
-    : "worker";
-
-  const newUser = {
-    id: `USR-${Date.now()}`,
-    name: userName,
-    role: assignedRole,
-    pin: password,
-    active: true
-  };
-
-  state.users.push(newUser);
-  localStorage.setItem("gz_users", JSON.stringify(state.users));
-  state.user = newUser;
-  localStorage.setItem("zeus_auth_user", JSON.stringify(newUser));
-  localStorage.setItem("zeus_last_username", newUser.name);
-
-  showToast(`⚡ ¡Bienvenido, ${newUser.name}! (${assignedRole === "manager" ? "👑 Manager" : "Taller"})`);
-  checkAuth();
-  syncWithSheets(false);
-
-  // Respaldar usuario nuevo en Google Sheets en segundo plano
-  syncResourceToSheets("save_user", { name: newUser.name, role: newUser.role, pin: newUser.pin });
   return false;
 };
 
@@ -1758,14 +1768,14 @@ window.saveApiUrlFromAdmin = function() {
   if (!input) return;
   const url = input.value.trim();
 
-  if (!url || !url.startsWith("https://script.google.com/")) {
-    alert("Por favor ingresa una URL válida de Google Apps Script que comience con https://script.google.com/");
+  if (!url || (!url.startsWith("https://script.google.com/") && !url.startsWith("https://"))) {
+    alert("Por favor ingresa una URL válida con HTTPS (de Google Apps Script o tu Proxy de Cloudflare Worker).");
     return;
   }
 
   API_URL = url;
   localStorage.setItem("gz_api_url", url);
-  showToast("✅ URL de Google Apps Script guardada con éxito.");
+  showToast("✅ URL de la API guardada con éxito.");
   syncWithSheets(true);
 };
 
@@ -2157,8 +2167,8 @@ window.handleChangePinSubmit = function(e) {
   const newPin = document.getElementById("modal-pin-new").value.trim();
   const confirmPin = document.getElementById("modal-pin-confirm").value.trim();
 
-  if (state.user.pin && state.user.pin !== currentPin && currentPin !== "1234") {
-    alert("El PIN actual ingresado no es correcto.");
+  if (!newPin || newPin.length < 4) {
+    alert("El nuevo PIN debe tener al menos 4 caracteres.");
     return;
   }
 
@@ -2167,19 +2177,9 @@ window.handleChangePinSubmit = function(e) {
     return;
   }
 
-  // Actualizar en users y en sesión
-  const uIdx = state.users.findIndex(u => u.name === state.user.name);
-  if (uIdx !== -1) {
-    state.users[uIdx].pin = newPin;
-  }
-  state.user.pin = newPin;
-
-  localStorage.setItem("gz_users", JSON.stringify(state.users));
-  localStorage.setItem("zeus_auth_user", JSON.stringify(state.user));
-
   closeModal();
-  showToast("🔐 ¡Tu PIN ha sido actualizado con éxito!");
-  syncResourceToSheets("update_pin", { userName: state.user.name, newPin: newPin });
+  showToast("🔐 Actualizando PIN en Google Sheets...");
+  syncResourceToSheets("update_pin", { userName: state.user.name, currentPin: currentPin, newPin: newPin });
 };
 
 window.openNewUserModal = function() {
@@ -2204,7 +2204,7 @@ window.openNewUserModal = function() {
       </div>
       <div class="form-group" style="margin-bottom:16px;">
         <label>PIN Inicial de Acceso *</label>
-        <input type="text" id="modal-user-pin" class="form-input" style="padding-left:12px;" value="1234" required />
+        <input type="text" id="modal-user-pin" class="form-input" style="padding-left:12px;" placeholder="Mínimo 4 dígitos" required />
       </div>
       <div style="display:flex; gap:10px;">
         <button type="button" class="btn-action-sm" style="flex:1; justify-content:center;" onclick="closeModal()">Cancelar</button>
@@ -2225,7 +2225,6 @@ window.handleCreateUserSubmit = function(e) {
     id: `USR-${Date.now()}`,
     name: name,
     role: role,
-    pin: pin,
     active: true
   });
 
@@ -2266,12 +2265,17 @@ async function syncSingleOrderToSheets(order) {
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         action: "create_order",
+        token: state.user?.token || "",
         data: order
       })
     });
     const json = await res.json();
     if (json && json.ok) {
       dequeuePendingSync("create_order", order.id);
+    } else if (json && !json.ok) {
+      if (json.error && (json.error.includes("No autorizado") || json.error.includes("Sesión expirada") || json.error.includes("Token"))) {
+        handleSessionExpired(json.error);
+      }
     }
   } catch (err) {
     console.warn("Sincronización en segundo plano pendiente:", err);
@@ -2281,14 +2285,21 @@ async function syncSingleOrderToSheets(order) {
 async function syncResourceToSheets(actionName, payload) {
   if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) return;
   try {
-    await fetch(API_URL, {
+    const res = await fetch(API_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         action: actionName,
+        token: state.user?.token || "",
         data: payload
       })
     });
+    const json = await res.json();
+    if (json && !json.ok) {
+      if (json.error && (json.error.includes("No autorizado") || json.error.includes("Sesión expirada") || json.error.includes("Token"))) {
+        handleSessionExpired(json.error);
+      }
+    }
   } catch (err) {
     console.warn("Sincronización de recurso pendiente:", err);
   }
@@ -2296,11 +2307,15 @@ async function syncResourceToSheets(actionName, payload) {
 
 async function syncUsersFromSheets() {
   if (!API_URL || API_URL.includes("YOUR_DEPLOYED_URL_HERE")) return;
+  if (!state.user || !state.user.token) return;
   try {
     const res = await fetch(API_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action: "dashboard" })
+      body: JSON.stringify({
+        action: "dashboard",
+        token: state.user.token
+      })
     });
     const json = await res.json();
     if (json && json.ok && json.data && json.data.users && Array.isArray(json.data.users) && json.data.users.length > 0) {
@@ -2308,13 +2323,11 @@ async function syncUsersFromSheets() {
         const exIdx = state.users.findIndex(u => u.name.toLowerCase() === (remoteUser.name || "").toLowerCase());
         if (exIdx >= 0) {
           state.users[exIdx].role = remoteUser.role || state.users[exIdx].role;
-          if (remoteUser.pin) state.users[exIdx].pin = remoteUser.pin;
         } else {
           state.users.push({
             id: remoteUser.id || `USR-${Date.now()}`,
             name: remoteUser.name,
             role: remoteUser.role || "worker",
-            pin: remoteUser.pin || "1234",
             active: remoteUser.active !== false
           });
         }
@@ -2341,9 +2354,20 @@ async function syncWithSheets(interactive = false) {
     const res = await fetch(API_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action: "dashboard" })
+      body: JSON.stringify({
+        action: "dashboard",
+        token: state.user?.token || ""
+      })
     });
     const json = await res.json();
+    if (!json || !json.ok) {
+      if (json && json.error && (json.error.includes("No autorizado") || json.error.includes("Sesión expirada") || json.error.includes("Token"))) {
+        handleSessionExpired(json.error);
+        return;
+      }
+      if (interactive) showToast("⚠️ " + ((json && json.error) ? json.error : "Error al sincronizar con Sheets."));
+      return;
+    }
     if (json.ok && json.data) {
       // 2. RECONCILIACIÓN INTELIGENTE DE PEDIDOS (NUNCA SOBREESCRIBIR CON ARRAY VACÍO)
       if (json.data.orders && Array.isArray(json.data.orders)) {
@@ -2629,13 +2653,23 @@ async function flushPendingSync() {
   const failed = [];
   for (const item of queue) {
     try {
+      const payload = {
+        ...item,
+        token: item.token || state.user?.token || ""
+      };
       const res = await fetch(API_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" },
-        body: JSON.stringify(item)
+        body: JSON.stringify(payload)
       });
       const json = await res.json();
-      if (!json || !json.ok) failed.push(item);
+      if (!json || !json.ok) {
+        failed.push(item);
+        if (json && json.error && (json.error.includes("No autorizado") || json.error.includes("Sesión expirada") || json.error.includes("Token"))) {
+          handleSessionExpired(json.error);
+          break;
+        }
+      }
     } catch (e) {
       failed.push(item);
     }
@@ -2750,6 +2784,7 @@ window.publishGlobalUpdate = async function() {
         headers: { "Content-Type": "text/plain;charset=utf-8" },
         body: JSON.stringify({
           action: "publish_system_version",
+          token: state.user?.token || "",
           data: { version: newVersion }
         })
       });
