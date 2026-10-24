@@ -11,13 +11,13 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Zeus Granola">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="icon" type="image/jpeg" href="logo_zeus.jpg">
+  <link rel="icon" type="image/jpeg" href="logo_zeus.jpg?v=7">
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
   
-  <link rel="stylesheet" href="styles.css?v=6">
+  <link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
 
@@ -27,7 +27,7 @@
   <div id="login-view" class="login-container">
     <div class="login-card">
       <div class="login-emblem-wrap">
-        <img src="logo_zeus.jpg" alt="Zeus Granola Fit" class="login-logo-img">
+        <img src="logo_zeus.jpg?v=7" alt="Zeus Granola Fit" class="login-logo-img">
       </div>
       <h1 class="login-title">ZEUS GRANOLA FIT</h1>
       <p class="login-subtitle">Sistema de Producción & Despacho</p>
@@ -48,7 +48,11 @@
             />
             <datalist id="registered-users-list">
               <option value="Admin Zeus (Manager)"></option>
+              <option value="Admin Zeus"></option>
+              <option value="admin@granolazeus.com"></option>
               <option value="Producción Zeus (Taller)"></option>
+              <option value="Operador Taller"></option>
+              <option value="produccion@granolazeus.com"></option>
             </datalist>
           </div>
           <small class="form-help">Escribe tu usuario o elígelo de las sugerencias</small>
@@ -90,7 +94,7 @@
     <!-- Barra Superior -->
     <header class="top-bar">
       <div class="brand-area">
-        <img src="logo_zeus.jpg" alt="Zeus Logo" class="topbar-logo-img">
+        <img src="logo_zeus.jpg?v=7" alt="Zeus Logo" class="topbar-logo-img">
         <div class="brand-text">
           <h1 class="brand-title">ZEUS FIT <span class="brand-lightning">⚡</span></h1>
           <p id="user-role-display" class="brand-sub">Admin Zeus · Manager</p>
@@ -159,6 +163,6 @@
   <!-- Contenedor de Notificaciones Toast -->
   <div id="toast-container" class="toast-container"></div>
 
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>
